@@ -1,4 +1,4 @@
-# privacy-preserving-data-systems
+# Privacy Preserving Data Systems
 System-level design frameworks for privacy-preserving data processing that enable lawful data use and analytical utility while minimizing reliance on identifiable personal information.
 
 ## Context & Goal
@@ -12,5 +12,53 @@ Privacy-preserving systems provide this technical capability. By shifting from i
 
 ## Purpose of This Repository
 This repository focuses on that systems perspective—how to implement privacy protection as a built-in, decision-driven capability that supports both trustworthy data use and the continued stability of data-driven infrastructure.Rather than focusing on algorithmic optimization alone, this repository describes system-level decision logic for determining how and at what granularity data may be processed or released in a privacy-aware manner.
+
+## Document Structure
+
+This repository is organized as a **layered system specification**, where each document
+builds on the previous one and introduces a strictly scoped responsibility.
+
+- [00 Overview](docs/00_overview.md)  
+  High-level architecture, design principles, and system goals.
+
+- [01 Problem Statement](docs/01_problem_statement.md)  
+  Formalizes the problem of privacy-induced data degradation and motivates
+  structure-aware data usage.
+
+- [02 Threat Model & Trust Boundaries](docs/02_threat_model_trust_boundaries.md)  
+  Defines protected assets, adversary capabilities, trust boundaries (Local / Shuffle / Central),
+  and **formally maps threat classes to measurable privacy risk dimensions (LPS sub-scores)**.
+  This document grounds all privacy reasoning in an explicit threat model.
+
+- [06 LPS Scoring Specification](docs/06_lps_scoring_spec.md)  
+  Defines the Local DP Privacy Score (LPS), including linkability, uniqueness,
+  inferability, and policy penalty, as quantitative proxies derived from the threat model.
+
+- [07 Granularity Selection Specification](docs/07_granularity_selection_spec.md)  
+  Specifies how data granularity (Item / Cluster / Aggregate) is selected by
+  optimizing utility within the privacy-feasible region defined by LPS.
+
+- [08 Routing Execution Specification](docs/08_routing_execution_spec.md)  
+  Defines runtime enforcement of routing decisions and guarantees that no
+  privacy decisions are made during signal ingestion.
+
+- [09 Data Lineage & Trust Boundary Enforcement](docs/09_data_lineage_and_trust_boundary.md)  
+  Formalizes how data flows across trust boundaries and enforces boundary invariants.
+
+- [10 Re-evaluation & Lifecycle Management](docs/10_re_evaluation_and_lifecycle_spec.md)  
+  Defines feature lifecycle states, re-evaluation triggers, downgrade rules,
+  and governance controls to ensure stability and auditability.
+
+---
+
+### Reading Guide
+
+- **Security / Privacy reviewers** should start with `02 → 06 → 09`.
+- **Infra / Data platform engineers** should focus on `07 → 08 → 10`.
+- **Research / ML readers** should read `01 → 06 → 07` for the core method.
+
+Together, these documents specify a complete **privacy-aware data usage framework**
+that is threat-grounded, structurally enforced, and auditable by design.
+
 
 

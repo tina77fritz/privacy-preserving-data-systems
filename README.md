@@ -13,7 +13,7 @@ Privacy-preserving systems provide this technical capability. By shifting from i
 ## Purpose of This Repository
 This repository focuses on that systems perspective—how to implement privacy protection as a built-in, decision-driven capability that supports both trustworthy data use and the continued stability of data-driven infrastructure.Rather than focusing on algorithmic optimization alone, this repository describes system-level decision logic for determining how and at what granularity data may be processed or released in a privacy-aware manner.
 
-## Document Structure
+## Repository Structure
 
 This repository is organized as a **layered system specification**, where each document
 builds on the previous one and introduces a strictly scoped responsibility.

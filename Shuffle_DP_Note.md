@@ -165,3 +165,186 @@ Key properties:
     "sample_rate": "number"
   }
 }
+```
+## Notes
+
+- `epsilon_local` may be omitted if local randomization is disabled.
+- Do **not** include stable identifiers; the shuffler’s job is unlinkability, not identity.
+# Part B — Shuffler-side (Ingress Validation → Shuffle/Mix → Forward)
+
+The shuffler is an intermediate service designed to **break sender–message linkage** by batching and permuting messages and stripping linkable transport metadata.
+
+
+## Step H — Shuffler Validation (3 checks)
+
+**Definition:** Ensure incoming shufflable messages are contract-compliant and safe to mix.
+
+### H1) Contract Validation (fail-fast)
+
+**Checks:**
+- `contract_id/version` exists and is active for Shuffle DP
+- `window_id` format valid; lateness within threshold
+
+**Reject action:**
+- Drop message; log `REJECT_CONTRACT`
+
+### H2) Schema + Dimension Validation (RFC-driven)
+
+**Checks:**
+- required fields present; forbidden fields absent
+- types valid
+- dims valid per catalogs (bucket sets / patterns)
+- message size limits
+
+**Reject action:**
+- Drop message; log `REJECT_SCHEMA` / `REJECT_DIM`
+
+### H3) Payload Validation (protocol-driven)
+
+**Checks depend on `protocol_type`:**
+- bounded increment: integer within `[0..cap]` (or `{-1,0,1}` if applicable)
+- categorical/vector: expected length/range
+- sketch: indices within `[0..W-1]`, `[0..D-1]`, updates within max
+
+**Reject action:**
+- Drop message; log `REJECT_PAYLOAD_*`
+
+**Output:**
+- `AcceptedMessages` stream
+
+---
+
+## Step I — Shuffle/Mix
+
+**Definition:** Batch, permute, and de-link messages from senders.
+
+**Actions:**
+- collect messages into batches (target batch size / time window)
+- apply random permutation (shuffle)
+- strip/normalize transport metadata that enables linkage (as feasible)
+
+**Output:**
+- `ShuffledBatch` forwarded to server
+
+# Part C — Server-side (Validate → Aggregation → Estimation → Optional Central Noise → Release)
+
+## Step S1 — Server Message Validation (3 checks)
+
+**Definition:** Defense-in-depth validation of messages arriving from the shuffler.
+
+### S1.1) Contract Validation
+
+**Checks:**
+- contract exists and is active
+- contract version is allowed for this rollout set
+- `window_id` format valid; lateness within threshold
+
+**Reject action:**
+- Drop message; log `REJECT_CONTRACT`
+
+### S1.2) Schema + Dimension Validation
+
+**Checks:**
+- required fields present; forbidden fields absent (per RFC)
+- types valid
+- dims valid per catalogs (bucket sets / patterns)
+
+**Reject action:**
+- Drop message; log `REJECT_SCHEMA` / `REJECT_DIM`
+
+### S1.3) Payload Validation
+
+**Checks:**
+- validate payload shape/range using `DPConfig(SHUFFLE).protocol_type`
+- apply the same validation rules as the shuffler (do not trust upstream completely)
+
+**Reject action:**
+- Drop message; log `REJECT_PAYLOAD_*`
+
+**Output:**
+- `ValidatedShuffledMessages` stream (the only input to aggregation)
+
+---
+
+## Step S2 — Aggregation
+
+**Definition:** Aggregate validated shuffled messages per analysis cell.
+
+**Group by:**
+- `(contract_id, contract_version, window_id, cell_key)`
+
+**Compute:**
+- `n = count(messages)`
+- `Y = sum(payload)` (or vector/sketch sums depending on protocol)
+
+**Output:**
+- `AggregatedStats`
+
+---
+
+## Step S3 — Estimation / Decoding (If Needed)
+
+**Definition:** Convert aggregated randomized stats into estimates of the true underlying metric.
+
+**If `local_randomization_enabled = true`:**
+- apply an unbias / decoding estimator consistent with `epsilon_local` and `protocol_type`
+
+**If `local_randomization_enabled = false`:**
+- estimator may be identity (protocol-dependent)
+- privacy relies primarily on shuffle unlinkability + caps
+
+**Output:**
+- `EstimatedStats` per cell
+- optionally: `variance`, `ci_lower`, `ci_upper`
+
+---
+
+## Step S4 — Optional Central Noise (Release Hardening)
+
+**Definition:** If configured, add a small amount of central DP noise at release time.
+
+**Why:**
+- handle small cells more safely
+- strengthen guarantees under conservative threat models
+- simplify downstream release constraints
+
+**Output:**
+- `DPHardenedStats`
+
+---
+
+## Step S5 — Released Table (Output)
+
+### Released Table Schema (SQL-like)
+
+```sql
+-- dp_release_shuffle_<feature_id>_<contract_version>
+contract_id       STRING
+contract_version  STRING
+feature_id        STRING
+window_id         STRING
+
+-- bucketed dimensions (cell_key)
+geo_bucket        STRING
+cluster_id        STRING
+age_bucket        STRING
+
+-- estimated metric
+estimate_value    DOUBLE
+
+-- optional uncertainty
+variance          DOUBLE
+ci_lower          DOUBLE
+ci_upper          DOUBLE
+
+-- provenance
+protocol_type     STRING
+local_randomization_enabled BOOLEAN
+epsilon_local     DOUBLE
+sample_rate       DOUBLE
+release_ts_ms     BIGINT
+```
+## Notes
+
+- dims are bucketed per contract
+- output is safe for downstream consumption under your governance model

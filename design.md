@@ -1,31 +1,499 @@
-$$
-\boxed{
-(g^*, b^*) = \arg\max_{(g,b)\in\mathcal{F}(f)} U(f,g,b)
-}
-$$
+## 1) Local DP Privacy Score (LPS): Implementable Technical Metrics
 
-$$
-\begin{aligned}
-&\text{最大化效用函数 } U(f,g,b) \\
-&\text{约束: } (g,b) \in \mathcal{F}(f)
-\end{aligned}
-$$
+LPS is a feature-level risk score computed before data is admitted to Central DP. It quantifies how dangerous it is to promote a signal beyond Local DP, considering:
 
-## Control Plane: Design Rationale and Conceptual Role
+- Semantic sensitivity (e.g.age/gender/location-like)
+- Identifiability / uniqueness / sparsity (rare values, long-tail)
+- Linkability (can be joined to other tables, stable across time)
+- Inferability (can reconstruct sensitive attributes even after LDP)
+- Local-DP exposure budget (effective ε used at the device/client)
 
-The Control Plane is the **policy intelligence layer** of the privacy-aware data system. Its purpose is not to execute data transformations or differential privacy mechanisms, but to *decide and codify* how those transformations must occur so that privacy, utility, and fairness objectives are met simultaneously.
+The score must be:
+- Auditable (decomposable into sub-scores)
+- Composable across releases
+- Cheap to compute at scale
 
-### Technique Win Compared to the tranditional Defficiate Privacy(DP)
+### LPS Decomposition
 
-Traditional privacy systems treat privacy protection as a purely runtime concern: raw data enters a pipeline, transformations are applied, and DP noise is added at release. This architecture implicitly assumes that (1) all features are equally sensitive, (2) all use cases tolerate the same privacy–utility tradeoffs, and (3) the same anonymization strategy should be uniformly applied. In practice, none of these assumptions hold. Different features have radically different linkability risk, heterogeneity value, cardinality, sparsity, and fairness sensitivity. Applying a uniform privacy mechanism to all of them is either overly destructive (destroying signal unnecessarily) or insufficiently protective (leaving re-identification or bias risk unmitigated).
+Define LPS as a weighted sum of normalized sub-scores:
 
-The Control Plane exists to **separate privacy reasoning from data execution**. It encodes privacy logic, utility intent, and governance constraints into machine-enforceable artifacts that the runtime plane consumes deterministically. Conceptually, it answers three foundational questions before any data flows:
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BLPS%7D(f)%20%3D%20%5Csigma%5Cleft(%5Csum_%7Bj%3D1%7D%5E6%20w_j%20%5Ccdot%20s_j(f)%5Cright)" alt="LPS formula">
+</p>
 
-1. *What representation of this feature is even permissible under privacy and policy constraints?*  
-2. *At what processing boundary (Local, Shuffle, Central) can this feature be safely handled?*  
-3. *At what granularity (item, cluster, aggregate) does this feature remain both useful and safe?*
+where <img src="https://latex.codecogs.com/svg.latex?s_j(f)%20%5Cin%20%5B0%2C1%5D" alt="s_j(f)∈[0,1]"> and <img src="https://latex.codecogs.com/svg.latex?%5Csigma" alt="σ"> is optional (e.g., identity or logistic). The weights are policy-controlled.
 
-Instead of hard-coding these decisions into pipelines, the Control Plane makes them **explicit, versioned, and auditable**.
+---
+
+#### (A) Semantic Sensitivity Score <img src="https://latex.codecogs.com/svg.latex?s_%7B%5Ctext%7Bsem%7D%7D" alt="s_sem">
+
+A deterministic mapping from feature type/classification:
+
+- **PII-like**: exact location, precise timestamp, device identifiers → 1.0
+- **Quasi-identifiers**: coarse location, age bucket, gender → 0.6–0.9
+- **Non-user data**: item metadata → 0.0–0.2
+
+**Implementation**: curated taxonomy + allowlist/denylist in DB (no ML required).
+
+---
+
+#### (B) Uniqueness / Rarity Score <img src="https://latex.codecogs.com/svg.latex?s_%7B%5Ctext%7Buniq%7D%7D" alt="s_uniq">
+
+Signals that take rare values are more re-identifiable even under LDP.
+Use a k-anonymity-like proxy computed from (LDP) frequency estimates:
+
+1. Estimate frequency of each category/value under LDP (or use safe historical aggregate)
+2. Compute:
+
+   **Tail mass formula**:
+   <p align="center">
+   <img src="https://latex.codecogs.com/svg.latex?%5Cfrac%7B%5Csum_%7Bv%3A%20%5Chat%7Bp%7D(v)%20%3C%20%5Ctau%7D%20%5Chat%7Bp%7D(v)%7D%7B%5Csum_v%20%5Chat%7Bp%7D(v)%7D" alt="Tail mass formula">
+   </p>
+
+   or **Min support**:
+   <p align="center">
+   <img src="https://latex.codecogs.com/svg.latex?%5Cmin_v%20%5Cleft(%5Chat%7Bp%7D(v)%20%5Ccdot%20N%5Cright)" alt="Min support">
+   </p>
+
+3. Normalize to [0,1]
+
+**Interpretation**: long-tail-heavy or ultra-sparse signals → higher risk.
+
+---
+
+#### (C) Linkability Score <img src="https://latex.codecogs.com/svg.latex?s_%7B%5Ctext%7Blink%7D%7D" alt="s_link">
+
+Even if each release is LDP-protected, linking across tables/time can raise risk.
+Compute from:
+
+- Presence of stable join keys (hashed IDs, stable device IDs) → high
+- TTL / retention length → higher risk
+- Join graph centrality (how many tables can join to this dataset) → higher risk
+
+A simple version:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?s_%7B%5Ctext%7Blink%7D%7D%20%3D%20%5Ctext%7Bclip%7D%5Cleft(%5Calpha%20%5Ccdot%20%5Cmathbb%7B1%7D%5B%5Ctext%7Bstable%5C_key%7D%5D%20%2B%20%5Cbeta%20%5Ccdot%20%5Clog(1%20%2B%20%5Ctext%7Bjoin%5C_degree%7D)%20%2B%20%5Cgamma%20%5Ccdot%20%5Cfrac%7B%5Ctext%7Bretention%5C_days%7D%7D%7BT%7D%5Cright)" alt="Linkability score">
+</p>
+
+---
+
+#### (D) Inferability Score <img src="https://latex.codecogs.com/svg.latex?s_%7B%5Ctext%7Binf%7D%7D" alt="s_inf">
+
+"How well can an attacker predict a sensitive attribute from this feature even after LDP?"
+
+**Implementation options** (choose one initially):
+
+**D1. Predictive proxy** (fast):
+- Train a simple classifier to predict protected attributes (age/gender/location bucket) from the released feature representation (LDP output)
+- Use AUC uplift over baseline as inferability
+- Normalize to [0,1]
+
+**D2. Mutual-information proxy** (more theoretical):
+- Use model-based MI estimate between feature output and sensitive attribute
+- Normalize
+
+---
+
+#### (E) Local DP Exposure Score <img src="https://latex.codecogs.com/svg.latex?s_%5Cvarepsilon" alt="s_ε">
+
+If local ε is large or repeated too often (composition), risk increases.
+
+Compute:
+
+1. Effective ε over a window:
+   <p align="center">
+   <img src="https://latex.codecogs.com/svg.latex?%5Cvarepsilon_%7B%5Ctext%7Beff%7D%7D%20%3D%20%5Csum_t%20%5Cvarepsilon_t" alt="Effective epsilon">
+   </p>
+
+2. Normalize:
+   <p align="center">
+   <img src="https://latex.codecogs.com/svg.latex?s_%5Cvarepsilon%20%3D%20%5Ctext%7Bclip%7D%5Cleft(%5Cfrac%7B%5Cvarepsilon_%7B%5Ctext%7Beff%7D%7D%7D%7B%5Cvarepsilon_%7B%5Cmax%7D%7D%5Cright)" alt="Epsilon score">
+   </p>
+
+---
+
+#### (F) Temporal Stability Score <img src="https://latex.codecogs.com/svg.latex?s_%7B%5Ctext%7Bstab%7D%7D" alt="s_stab">
+
+Stable signals across time can be linked and deanonymized more easily.
+
+Compute:
+- Autocorrelation / persistence rate across days (on safe aggregates)
+- Fraction of users with same value repeated
+- Normalize to [0,1]
+
+---
+
+### Breakdown By Routing Tiers 
+
+Define thresholds:
+
+- **High risk**: LPS ≥ 0.75 → **Aggregate-only** (item/global aggregation, no Central DP raw)
+- **Medium risk**: 0.40 ≤ LPS < 0.75 → **Shuffle DP** under ε constraint
+- **Low risk**: LPS < 0.40 → eligible for **Central DP** if IBV is sufficient
+
+**Add IBV gating** (your requirement):
+
+- If **Low risk** AND **IBV high** → Central DP item-level permitted
+- If **Low risk** but **IBV low** → still aggregate (not worth the risk/budget)
+
+This separates "privacy risk" from "worth it".
+
+
+## Output
+
+Persist a scorecard per feature:
+
+- **Overall LPS** - Final computed risk score
+- **Each sub-score**:
+  - <img src="https://latex.codecogs.com/svg.latex?s_{\text{sem}}" alt="s_sem"> - Semantic sensitivity
+  - <img src="https://latex.codecogs.com/svg.latex?s_{\text{uniq}}" alt="s_uniq"> - Uniqueness/rarity
+  - <img src="https://latex.codecogs.com/svg.latex?s_{\text{link}}" alt="s_link"> - Linkability
+  - <img src="https://latex.codecogs.com/svg.latex?s_{\text{inf}}" alt="s_inf"> - Inferability
+  - <img src="https://latex.codecogs.com/svg.latex?s_{\varepsilon}" alt="s_ε"> - Local DP exposure
+  - <img src="https://latex.codecogs.com/svg.latex?s_{\text{stab}}" alt="s_stab"> - Temporal stability
+- **Weights used** - Policy-controlled weighting parameters
+- **Computation metadata**:
+  - Computation window
+  - Data source
+  - Model version (if D1 predictive proxy used)
+
+This audit trail is essential for governance and compliance verification.
+
+
+## 4. Granularity Selection
+
+Once a route is allowed, the system must choose granularity:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?g%20%5Cin%20%5C%7B%5Ctext%7BITEM%7D%2C%20%5Ctext%7BCLUSTER%7D%2C%20%5Ctext%7BAGGREGATE%7D%5C%7D" alt="g ∈ {ITEM, CLUSTER, AGGREGATE}">
+</p>
+
+This step is not handled by DP mechanisms and is the key optimization.
+
+### 4.1 Optimization Objective
+
+For a count / frequency feature <img src="https://latex.codecogs.com/svg.latex?f" alt="f">, select:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?g%5E*%20%3D%20%5Carg%5Cmin_g%20%5Cleft%5B%20%5Clambda%20%5Ccdot%20%5Ctext%7BVar%7D_%7B%5Ctext%7BDP%7D%7D(%5Chat%7Bc%7D_g)%20%2B%20%5CDelta%20L_%7B%5Ctext%7Bagg%7D%7D(g)%20%5Cright%5D" alt="g* = argmin_g [λ·Var_DP(ĉ_g) + ΔL_agg(g)]">
+</p>
+
+Where:
+
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BVar%7D_%7B%5Ctext%7BDP%7D%7D(%5Chat%7Bc%7D_g)" alt="Var_DP(ĉ_g)">: noise-induced variance under the chosen DP route
+- <img src="https://latex.codecogs.com/svg.latex?%5CDelta%20L_%7B%5Ctext%7Bagg%7D%7D(g)" alt="ΔL_agg(g)">: information loss from aggregation
+- <img src="https://latex.codecogs.com/svg.latex?%5Clambda" alt="λ">: feature sensitivity to noise (configurable or estimated)
+
+### 4.2 Noise Variance (Computable)
+
+For Shuffle DP with randomized response–style frequency estimation:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BVar%7D_%7B%5Ctext%7BDP%7D%7D(%5Chat%7Bc%7D_g)%20%5Capprox%20n_g%20%5Ccdot%20%5Cfrac%7Be%5E%7B%5Cvarepsilon_0(g)%7D%20%2B%201%7D%7B(e%5E%7B%5Cvarepsilon_0(g)%7D%20-%201)%5E2%7D" alt="Var_DP(ĉ_g) ≈ n_g · (e^{ε₀(g)} + 1)/(e^{ε₀(g)} - 1)²">
+</p>
+
+Where:
+
+- <img src="https://latex.codecogs.com/svg.latex?n_g" alt="n_g">: effective support size at granularity <img src="https://latex.codecogs.com/svg.latex?g" alt="g">
+- <img src="https://latex.codecogs.com/svg.latex?%5Cvarepsilon_0(g)" alt="ε₀(g)">: local parameter derived via shuffle amplification
+
+Approximation:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Cvarepsilon_0(g)%20%5Capprox%20%5Cvarepsilon%20%5Ccdot%20%5Cfrac%7B%5Csqrt%7Bn_g%7D%7D%7B%5Clog(1%2F%5Cdelta)%7D" alt="ε₀(g) ≈ ε · √n_g / log(1/δ)">
+</p>
+
+**Monotonic property**:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?n_%7B%5Ctext%7BITEM%7D%7D%20%5Cll%20n_%7B%5Ctext%7BCLUSTER%7D%7D%20%5Cll%20n_%7B%5Ctext%7BAGGREGATE%7D%7D%20%5CRightarrow%20%5Ctext%7BVar%7D_%7B%5Ctext%7BITEM%7D%7D%20%5Cgg%20%5Ctext%7BVar%7D_%7B%5Ctext%7BCLUSTER%7D%7D%20%5Cgg%20%5Ctext%7BVar%7D_%7B%5Ctext%7BAGGREGATE%7D%7D" alt="n_ITEM ≪ n_CLUSTER ≪ n_AGGREGATE ⇒ Var_ITEM ≫ Var_CLUSTER ≫ Var_AGGREGATE">
+</p>
+
+### 4.3 Aggregation Loss <img src="https://latex.codecogs.com/svg.latex?%5CDelta%20L_%7B%5Ctext%7Bagg%7D%7D" alt="ΔL_agg">
+
+Two supported estimators:
+
+**A. Oracle Ablation (Offline)**
+
+Train models with no privacy noise under each granularity and measure loss gap.
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5CDelta%20L_%7B%5Ctext%7Bagg%7D%7D(g)%20%3D%20L_%7B%5Ctext%7Boracle%7D%7D(g)%20-%20L_%7B%5Ctext%7Boracle%7D%7D(%5Ctext%7BITEM%7D)" alt="ΔL_agg(g) = L_oracle(g) - L_oracle(ITEM)">
+</p>
+
+**B. Heterogeneity Proxy (Online)**
+
+Use item-level effect dispersion:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5CDelta%20L_%7B%5Ctext%7Bagg%7D%7D(g)%20%5Cpropto%20%5Ctext%7BVar%7D(%5Cbeta_i)" alt="ΔL_agg(g) ∝ Var(β_i)">
+</p>
+
+### 4.4 Decision Outcome
+
+The selected granularity is materialized only for the allowed route.
+
+**Examples**:
+- `SHUFFLE_DP + CLUSTER`
+- `CENTRAL_DP + ITEM`
+- `LOCAL_DP + AGGREGATE`
+
+# Control Plane: Formal Definitions for C2 / C3 / C4
+
+This section formalizes the core computational objects used by the Control Plane:
+the policy-safe schema transformation (C2), the representation risk model (LPS, input to C3),
+the boundary decision rule (C3), and the granularity refinement rule (C4).
+
+All quantities defined below are deterministic, versioned, and auditable.
+
+---
+
+## C2 — Policy-Safe Schema Transformation
+
+Each feature begins as a normalized feature specification:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?F%20%3D%20(S%2C%20K%2C%20D%2C%20T)" alt="F = (S, K, D, T)">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?S%20%3D%20%5C%7Bf_1%2C%20f_2%2C%20%5Cdots%2C%20f_n%5C%7D" alt="S = {f₁, f₂, ..., fₙ}"> is the raw field set  
+- <img src="https://latex.codecogs.com/svg.latex?K%20%5Csubseteq%20S" alt="K ⊆ S"> is the set of join-enabling keys  
+- <img src="https://latex.codecogs.com/svg.latex?D%20%5Csubseteq%20S" alt="D ⊆ S"> is the set of dimension fields  
+- <img src="https://latex.codecogs.com/svg.latex?T" alt="T"> is the target statistic (e.g., count, sum, mean, rate)
+
+Let the organizational privacy policy be:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?P%20%3D%20%5C%7Bp_1%2C%20p_2%2C%20%5Cdots%2C%20p_m%5C%7D" alt="P = {p₁, p₂, ..., pₘ}">
+</p>
+
+We define a deterministic schema transformation:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5CPhi_P(F)%20%3D%20(S%27%2C%20K%27%2C%20D%27%2C%20T%27)" alt="Φₚ(F) = (S', K', D', T')">
+</p>
+
+subject to the following rules.
+
+---
+
+### 1. Identifier Elimination
+
+Let <img src="https://latex.codecogs.com/svg.latex?I_P" alt="I_P"> be the set of forbidden identifiers defined by policy <img src="https://latex.codecogs.com/svg.latex?P" alt="P">
+(e.g., user_id, device_id, session_id).
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?S%27%20%3D%20S%20%5Csetminus%20I_P" alt="S' = S \ I_P">
+</p>
+
+---
+
+### 2. Dimension Coarsening
+
+Each retained dimension <img src="https://latex.codecogs.com/svg.latex?d%20%5Cin%20D%20%5Csetminus%20I_P" alt="d ∈ D \ I_P"> is transformed by a policy-approved
+bucketization or generalization function <img src="https://latex.codecogs.com/svg.latex?g_d" alt="g_d">.
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?D%27%20%3D%20%5Cbigcup_%7Bd%20%5Cin%20D%20%5Csetminus%20I_P%7D%20g_d(d)" alt="D' = ⋃_{d ∈ D \ I_P} g_d(d)">
+</p>
+
+Each <img src="https://latex.codecogs.com/svg.latex?g_d%20%3A%20%5Ctext%7BDom%7D(d)%20%5Cto%20%5Ctext%7BDom%7D(d%27)" alt="g_d: Dom(d) → Dom(d')"> maps raw values into approved buckets.
+
+---
+
+### 3. Join-Surface Reduction
+
+Join keys are restricted to fields that remain after policy filtering.
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?K%27%20%3D%20K%20%5Ccap%20S%27" alt="K' = K ∩ S'">
+</p>
+
+---
+
+### 4. Transform Plan Compilation
+
+The TransformPlan is compiled as:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?T%27%20%3D%20(T%2C%20%5C%7Bg_d%5C%7D%2C%20%5C%7B%5Ctext%7Bclip%7D_f%5C%7D)" alt="T' = (T, {g_d}, {clip_f})">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?g_d" alt="g_d"> are the bucketization / generalization functions  
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7Bclip%7D_f" alt="clip_f"> are contribution-bounding functions associated with each numeric field
+
+The output of C2 is the policy-safe schema:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?S_P%20%3D%20(S%27%2C%20K%27%2C%20D%27%2C%20T%27)" alt="S_P = (S', K', D', T')">
+</p>
+
+This schema is the canonical privacy-normalized semantic form of the feature.
+All downstream representation decisions operate exclusively on <img src="https://latex.codecogs.com/svg.latex?S_P" alt="S_P">.
+
+---
+
+## C3 — Representation Risk Model (LPS)
+
+Representation-level privacy risk is captured by persistent Local Privacy Scorecards (LPS)
+attached to policy-safe schemas.
+
+For a policy-safe schema <img src="https://latex.codecogs.com/svg.latex?S_P" alt="S_P"> and a candidate granularity <img src="https://latex.codecogs.com/svg.latex?g" alt="g">,
+the scorecard is defined as:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BLPS%7D(S_P%2C%20g)%20%3D%20(L(S_P)%2C%20U(S_P%2C%20g)%2C%20I(S_P)%2C%20R(S_P))" alt="LPS(S_P, g) = (L(S_P), U(S_P, g), I(S_P), R(S_P))">
+</p>
+
+---
+
+### 1. Linkability Component
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?L(S_P)%20%3D%20%5Csum_%7Bk%20%5Cin%20K%27%7D%20%5C%5B%20w_k%20%5Ctimes%20%5Ctext%7Bstab%7D(k)%20%5C%5D" alt="L(S_P) = Σ_{k∈K'} [w_k × stab(k)]">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?K%27" alt="K'"> are retained join keys  
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7Bstab%7D(k)%20%5Cin%20%5B0%2C%201%5D" alt="stab(k) ∈ [0,1]"> is the temporal stability of key <img src="https://latex.codecogs.com/svg.latex?k" alt="k">  
+- <img src="https://latex.codecogs.com/svg.latex?w_k%20%5Cgeq%200" alt="w_k ≥ 0"> is a key-specific weight
+
+---
+
+### 2. Uniqueness / Small-Cell Component
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?U(S_P%2C%20g)%20%3D%20%5Cmathbb%7BE%7D%5Cleft%5B%20%5Cfrac%7B1%7D%7B%5Ctext%7Bsupp%7D(c)%7D%20%5Cright%5D" alt="U(S_P, g) = 𝔼[1/supp(c)]">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?g" alt="g"> is a candidate granularity (ITEM, CLUSTER, AGGREGATE)  
+- <img src="https://latex.codecogs.com/svg.latex?c" alt="c"> is a cell induced by grouping under <img src="https://latex.codecogs.com/svg.latex?g" alt="g">  
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7Bsupp%7D(c)" alt="supp(c)"> is the support (number of distinct entities) in cell <img src="https://latex.codecogs.com/svg.latex?c" alt="c">  
+- the expectation is taken over historical or simulated data
+
+---
+
+### 3. Inferability Component
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?I(S_P)%20%3D%20%5Cmax_%7Ba%20%5Cin%20A_%7B%5Ctext%7Bsensitive%7D%7D%7D%20%5Ctext%7BMI%7D(a%3B%20S_P)" alt="I(S_P) = max_{a∈A_sensitive} MI(a; S_P)">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?A_%7B%5Ctext%7Bsensitive%7D%7D" alt="A_sensitive"> is the set of sensitive attributes  
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BMI%7D(a%3B%20S_P)" alt="MI(a; S_P)"> is the mutual information between <img src="https://latex.codecogs.com/svg.latex?a" alt="a"> and the retained fields in <img src="https://latex.codecogs.com/svg.latex?S_P" alt="S_P">
+
+---
+
+### 4. Policy Penalty Component
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?R(S_P)%20%3D%20%5Csum_%7Bp%20%5Cin%20P_%7B%5Ctext%7Bapplicable%7D%7D%7D%20%5Clambda_p" alt="R(S_P) = Σ_{p∈P_applicable} λ_p">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?P_%7B%5Ctext%7Bapplicable%7D%7D%20%5Csubseteq%20P" alt="P_applicable ⊆ P"> are policies triggered by <img src="https://latex.codecogs.com/svg.latex?S_P" alt="S_P">  
+- <img src="https://latex.codecogs.com/svg.latex?%5Clambda_p%20%5Cgeq%200" alt="λ_p ≥ 0"> is the penalty weight for policy <img src="https://latex.codecogs.com/svg.latex?p" alt="p">
+
+---
+
+### 5. Aggregated Representation Risk
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Cbegin%7Baligned%7D%0A%5Ctext%7BRisk%7D(S_P%2C%20g)%20%26%3D%20%5Calpha_L%20%5Ctimes%20L(S_P)%20%5C%5C%0A%26%5Cquad%20%2B%20%5Calpha_U%20%5Ctimes%20U(S_P%2C%20g)%20%5C%5C%0A%26%5Cquad%20%2B%20%5Calpha_I%20%5Ctimes%20I(S_P)%20%5C%5C%0A%26%5Cquad%20%2B%20%5Calpha_R%20%5Ctimes%20R(S_P)%0A%5Cend%7Baligned%7D" alt="Risk formula">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?%5Calpha_L%2C%20%5Calpha_U%2C%20%5Calpha_I%2C%20%5Calpha_R%20%5Cgeq%200" alt="α_L, α_U, α_I, α_R ≥ 0"> are system weights  
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BRisk%7D(S_P%2C%20g)" alt="Risk(S_P, g)"> is a scalar representation-level risk score
+
+LPS is catalog-level, versioned, and independent of runtime execution.
+
+---
+
+## C3 — Boundary Decision Rule
+
+Let the available trust boundaries be:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?B%20%3D%20%5C%7B%5Ctext%7BLOCAL%7D%2C%20%5Ctext%7BSHUFFLE%7D%2C%20%5Ctext%7BCENTRAL%7D%5C%7D" alt="B = {LOCAL, SHUFFLE, CENTRAL}">
+</p>
+
+Each boundary <img src="https://latex.codecogs.com/svg.latex?b%20%5Cin%20B" alt="b ∈ B"> is associated with a maximum allowable risk threshold <img src="https://latex.codecogs.com/svg.latex?%5Ctau_b" alt="τ_b">.
+
+Let <img src="https://latex.codecogs.com/svg.latex?g_%7B%5Cmin%7D(b)" alt="g_min(b)"> denote the finest granularity permitted under boundary <img src="https://latex.codecogs.com/svg.latex?b" alt="b">.
+
+We define boundary feasibility as:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BFeasible%7D(b%2C%20S_P)%20%5Cequiv%20%5Ctext%7BRisk%7D(S_P%2C%20g_%7B%5Cmin%7D(b))%20%5Cle%20%5Ctau_b" alt="Feasible(b, S_P) ≡ Risk(S_P, g_min(b)) ≤ τ_b">
+</p>
+
+The boundary selection rule is:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?b%5E*%20%3D%20%5Cunderset%7Bb%20%5Cin%20B%7D%7B%5Coperatorname%7Barg%5C%2Cmax%7D%7D%20%5C%2C%20%5Ctext%7Butility%7D(b)%20%5Cquad%20%5Ctext%7Bsubject%20to%7D%20%5Cquad%20%5Ctext%7BFeasible%7D(b%2C%20S_P)" alt="b* = argmax_{b∈B} utility(b) subject to Feasible(b, S_P)">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7Butility%7D(b)" alt="utility(b)"> is a monotonic preference score over boundaries  
+  (e.g., CENTRAL > SHUFFLE > LOCAL)
+
+The selected <img src="https://latex.codecogs.com/svg.latex?b%5E*" alt="b*"> defines the trust envelope within which all subsequent
+granularity refinement must occur.
+
+---
+
+## C4 — Granularity Refinement Rule
+
+Let the candidate granularity set be:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?G%20%3D%20%5C%7B%5Ctext%7BITEM%7D%2C%20%5Ctext%7BCLUSTER%7D%2C%20%5Ctext%7BAGGREGATE%7D%5C%7D" alt="G = {ITEM, CLUSTER, AGGREGATE}">
+</p>
+
+Given a fixed boundary <img src="https://latex.codecogs.com/svg.latex?b%5E*" alt="b*">, the representation utility of granularity <img src="https://latex.codecogs.com/svg.latex?g%20%5Cin%20G" alt="g ∈ G"> is:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?U(g)%20%3D%20%5Cfrac%7B%5Ctext%7Bsignal%5C_power%7D(S_P%2C%20g)%7D%7B%5Ctext%7Bnoise%5C_variance%7D(b%5E*%2C%20g)%7D" alt="U(g) = signal_power(S_P,g)/noise_variance(b*,g)">
+</p>
+
+where:
+
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7Bsignal%5C_power%7D(S_P%2C%20g)" alt="signal_power(S_P,g)"> measures heterogeneity retained under granularity <img src="https://latex.codecogs.com/svg.latex?g" alt="g">  
+- <img src="https://latex.codecogs.com/svg.latex?%5Ctext%7Bnoise%5C_variance%7D(b%5E*%2C%20g)" alt="noise_variance(b*,g)"> is the effective variance induced by DP noise
+  under boundary <img src="https://latex.codecogs.com/svg.latex?b%5E*" alt="b*"> and granularity <img src="https://latex.codecogs.com/svg.latex?g" alt="g">
+
+Granularity feasibility is defined as:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?%5Ctext%7BRisk%7D(S_P%2C%20g)%20%5Cle%20%5Ctau_g" alt="Risk(S_P, g) ≤ τ_g">
+</p>
+
+where <img src="https://latex.codecogs.com/svg.latex?%5Ctau_g" alt="τ_g"> is a granularity-specific risk threshold.
+
+The granularity selection rule is:
+
+<p align="center">
+<img src="https://latex.codecogs.com/svg.latex?g%5E*%20%3D%20%5Cunderset%7Bg%20%5Cin%20G%7D%7B%5Coperatorname%7Barg%5C%2Cmax%7D%7D%20%5C%2C%20U(g)%20%5Cquad%20%5Ctext%7Bsubject%20to%7D%20%5Cquad%20%5Ctext%7BRisk%7D(S_P%2C%20g)%20%5Cle%20%5Ctau_g" alt="g* = argmax_{g∈G} U(g) subject to Risk(S_P,g) ≤ τ_g">
+</p>
+
+The selected <img src="https://latex.codecogs.com/svg.latex?g%5E*" alt="g*"> is the finest resolution admissible within the
+trust envelope defined by <img src="https://latex.codecogs.com/svg.latex?b%5E*" alt="b*">.
+
+---
 
 ---
 

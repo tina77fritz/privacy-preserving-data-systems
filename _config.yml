@@ -1,0 +1,31 @@
+# 站点标题和描述
+title: "你的项目名称"
+description: "项目描述"
+
+# 使用 MathJax 支持数学公式
+markdown: kramdown
+kramdown:
+  math_engine: mathjax
+  syntax_highlighter: rouge
+
+# 主题设置（可选）
+theme: jekyll-theme-minimal
+
+# 插件（可选）
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+
+# 排除文件
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules/
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+
+# 其他配置
+baseurl: "" # 子路径，如果是项目页面
+url: "" # 你的域名

@@ -239,6 +239,100 @@ The selected granularity is materialized only for the allowed route.
 - `CENTRAL_DP + ITEM`
 - `LOCAL_DP + AGGREGATE`
 
+# Runtime Plane: Contract-Driven Execution Under Privacy Constraints
+
+The Runtime Plane is the execution substrate of the privacy-aware data system. Its sole responsibility is to materialize features under the exact representation constraints compiled by the Control Plane. It does not make privacy decisions, reinterpret policy, or adapt representation choices at runtime. Instead, it enforces privacy as a structural invariant of the dataflow.
+
+This separation is intentional. In conventional data systems, privacy enforcement is often implemented as a collection of runtime checks, query rewrites, or access-layer filters. Such mechanisms are inherently fragile: they depend on correct operator ordering, consistent query patterns, and human discipline. In contrast, the Runtime Plane is designed to eliminate unsafe intermediate representations by construction. It only executes pipelines whose representation form has already been proven privacy-feasible.
+
+At the center of the Runtime Plane is a versioned `ContractBundle`, produced by the Control Plane. This contract specifies the schema, trust boundary, granularity, transformation semantics, safeguards, and DP configuration under which a feature is allowed to exist. Runtime does not possess the authority to widen any of these dimensions.
+
+## Representation-First Execution Semantics
+
+The fundamental design principle of the Runtime Plane is that privacy risk is dominated by representation choices, not by downstream query operators. Accordingly, runtime execution is structured around representation-level constraints rather than operator-level enforcement.
+
+Every runtime path—`LOCAL`, `SHUFFLE`, and `CENTRAL`—shares a common semantic foundation:
+
+*   A deterministic `TransformPlan` defines how raw signals are mapped into a policy-safe semantic form.
+*   Contribution bounding ensures that no single entity can dominate any aggregate.
+*   Aggregation is performed strictly at the granularity approved by the Control Plane.
+*   Safeguards (e.g., k-thresholds, downgrade rules) are enforced as invariants over the materialized representation.
+*   Noise injection occurs only at representation-approved boundaries.
+
+This architecture ensures that privacy guarantees are enforced structurally, rather than opportunistically.
+
+## Boundary-Specific Semantics
+
+The Runtime Plane supports three execution boundaries—`LOCAL`, `SHUFFLE`, and `CENTRAL`—each corresponding to a different trust radius and attribution model. These are not deployment choices; they are representation constraints compiled into the contract.
+
+### Local Path
+
+In the `LOCAL` path, all privacy-sensitive transformations occur on the client. Raw signals are transformed, bucketized, contribution-bounded, encoded, and randomized before transmission. The server only observes randomized reports.
+
+This path enforces unlinkability and attribution protection by ensuring that the server never sees raw or semi-raw feature values. The estimator at the server reconstructs aggregates in expectation, but no individual report is semantically meaningful.
+
+The `LOCAL` path is structurally incapable of producing linkable raw features, regardless of downstream access controls.
+
+### Shuffle Path
+
+In the `SHUFFLE` path, attribution is broken through message mixing. Clients emit lightly transformed or randomized messages that are passed through a shuffler which permutes and batches reports before forwarding them to the server.
+
+This breaks sender–message linkage without requiring full local randomization. The server aggregates shuffled messages and applies an estimator to reconstruct statistics. Optional central noise may be layered on top.
+
+The `SHUFFLE` path occupies an intermediate trust envelope: higher fidelity than pure local DP, but with structural unlinkability guarantees stronger than central DP alone.
+
+### Central Path
+
+In the `CENTRAL` path, raw signals are processed within a server-side trust boundary under strict isolation. `TransformPlan` and contribution bounding are applied server-side, followed by pre-aggregation into ephemeral staging tables.
+
+These staging tables are **not** treated as analytics assets. They are subject to TTL, isolation, access restrictions, and segmentation policies compiled into the `ContractBundle`. Small-cell exposure is structurally prevented via k-threshold filters and downgrade rules before any release.
+
+Noise is injected only at release time. No unsafe intermediate representation is ever materialized into a long-lived, queryable form.
+
+## Contract-Driven Determinism
+
+A defining property of the Runtime Plane is that it is contract-driven and deterministic.
+
+Given a `ContractBundle` **C** and an input event stream **E**, the released table **T** is a pure function:
+
+**T = Runtime(C, E)**
+
+All runtime behavior—schema shape, grouping keys, aggregation resolution, transformation semantics, safeguard enforcement, and noise configuration—is fixed by the contract.
+
+This eliminates the possibility of privacy drift caused by query evolution, operator reordering, or downstream misuse. If a representation is not encoded in the contract, it cannot be materialized at runtime.
+
+## Structural Safeguards and Downgrade Semantics
+
+The Runtime Plane enforces structural safeguards that are invariant under data distribution shift.
+
+The most important of these is the *downgrade mechanism*: if any aggregate cell violates the minimum support threshold `k_min`, the runtime does not suppress or mask the cell. Instead, it re-aggregates the entire feature at the next coarser granularity approved by the Control Plane.
+
+This ensures that:
+1.  small-cell exposure cannot occur even under skew or drift,
+2.  privacy violations are resolved by representation change, not output filtering,
+3.  the system degrades gracefully toward safer semantic forms.
+
+This mechanism guarantees that the released representation always lies within the feasible privacy envelope defined by the Control Plane.
+
+## Why the Runtime Plane Is Necessary
+
+The Runtime Plane exists because privacy failures in production systems almost never arise from incorrect noise formulas. They arise from:
+
+*   unsafe intermediate tables being accidentally materialized,
+*   joins that reintroduce identifiers,
+*   analysts querying raw or semi-raw staging data,
+*   small cells leaking sensitive information under skew,
+*   downstream queries widening the trust envelope implicitly.
+
+The Runtime Plane eliminates these failure modes by construction. It treats staging as *raw within boundary*, treats materialized outputs as the only safe artifacts, and enforces representation constraints as non-negotiable invariants.
+
+## Role in the Overall Architecture
+
+*   **The Control Plane** determines *what representations are allowed to exist*.
+*   **The Runtime Plane** ensures that *no other representations can exist*.
+
+Together, they transform privacy from an access-layer concern into a representation-layer invariant. This is the core architectural shift of the system.
+
 # Control Plane: Formal Definitions for C2 / C3 / C4
 
 This section formalizes the core computational objects used by the Control Plane:

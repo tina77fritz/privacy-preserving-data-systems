@@ -2,7 +2,6 @@
 **Scope:** Selecting optimal data granularity (Item / Cluster / Aggregate)
            under privacy-induced noise and policy constraints.
 
----
 
 ## 1. Purpose
 

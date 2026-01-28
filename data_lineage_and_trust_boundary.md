@@ -1,7 +1,7 @@
 # Data Lineage and Trust Boundary Specification 
 
 **Scope:** Formal specification of data lineage, trust boundaries, and
-privacy invariants across Local, Shuffle, and Central environments.
+privacy invariants across Local, Shuffle, and Central environments.  
 
 --- 
 

@@ -3,7 +3,7 @@
 **Scope:** Formal specification of data lineage, trust boundaries, and
 privacy invariants across Local, Shuffle, and Central environments.
 
----
+--- 
 
 ## 1. Purpose
 

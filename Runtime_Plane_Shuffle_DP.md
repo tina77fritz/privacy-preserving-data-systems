@@ -4,7 +4,7 @@ graph LR
     %% SHUFFLE DP
     %% ==============================================
     
-    %% CLIENT STAGE
+    %% CLIENT STAGE 
     A["📡 Raw Signal"] --> B{"🔍 Schema Check"}
     B -->|Pass| C{"Policy Check"}
     C -->|Pass| D{"Sampling Check"}

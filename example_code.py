@@ -9,7 +9,7 @@ This is a **spec-aligned, engineering-friendly skeleton**:
 - DP calibration is stubbed (pluggable).
 
 Run:
-  python privacy_controller.py
+  python privacy_controller.py  
 
 Notes:
 - This is not a production security implementation.

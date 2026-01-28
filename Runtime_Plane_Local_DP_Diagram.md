@@ -1,6 +1,6 @@
 # LOCAL DP
 
-```mermaid
+```mermaid 
 graph LR
     %% ==============================================
     %% LOCAL DP PATH

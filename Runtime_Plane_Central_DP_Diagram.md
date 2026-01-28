@@ -3,7 +3,7 @@ graph LR
     %% CENTRAL DP
     %% CLIENT
     subgraph CLIENT_CDP [CLIENT]
-        C1["User<br>Actions"]
+        C1["User<br>Actions"]  
         C2["Event<br>Collection"]
         C1 --> C2
     end

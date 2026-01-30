@@ -1,0 +1,13 @@
+[project]
+name = "ppds"
+version = "0.1.0"
+description = "Privacy-Preserving Data Systems: LPS scoring, routing, planning, and budget ledger"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

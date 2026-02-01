@@ -204,3 +204,7 @@ For best reproducibility, also record the plan fingerprint produced by:
 ```bash
 ppds plan --policy policy.yaml --features features.yaml --out plan.json
 jq -r .fingerprint plan.json
+```
+
+### Build Badge
+[![CI](https://github.com/tina77fritz/privacy-preserving-data-systems/actions/workflows/ci.yml/badge.svg)](https://github.com/tina77fritz/privacy-preserving-data-systems/actions/workflows/ci.yml)

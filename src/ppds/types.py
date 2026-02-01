@@ -79,11 +79,14 @@ class Scorecard:
     risk: float
     contributors: Dict[str, List[Tuple[str, float]]]  # component -> [(field, contribution)]
 
-
 @dataclass(frozen=True)
 class Decision:
     boundary: Boundary
     granularity: Granularity
     feasible: bool
-    scorecard: Scorecard
+    scorecard: Any
     reason: str
+
+    # NEW: planner binding artifacts (kept generic to avoid circular imports)
+    planner_constraint: Optional[Any] = None
+    planner_constraints_json: Optional[Dict[str, Any]] = field(default=None)

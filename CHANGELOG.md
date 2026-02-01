@@ -24,6 +24,10 @@ Release notes prioritize: auditability, deterministic behavior, and integration 
   - `ppds emit-sql` to emit SQL-compatible outputs for warehouse integration
 - SQL emitter with initial dialect support (e.g., Spark) and parameterized query generation.
 - Minimal end-to-end example configs under `examples/` for quickstart usage.
+- **Quickstart**: documented an end-to-end evaluation flow (validate → plan → emit SQL) with reproducibility guidance (pinned version + plan fingerprint).
+- **Audit-friendly outputs**: documented expectations for structured decision reasons and deterministic fingerprints in `plan.json` (contract-level guidance for integrations).
+- **Warehouse integration entrypoint**: documented SQL emission usage and dialect placeholder (intended for scheduled warehouse jobs / offline evaluation).
+
 
 ### Changed
 - Repository documentation reorganized under `docs/spec/` and `docs/api/` to separate specifications from usage docs.

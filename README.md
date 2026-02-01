@@ -191,3 +191,16 @@ python -c "import ppds; print(ppds.__version__)"
 ppds plan --policy policy.yaml --features features.yaml --out plan.json
 jq -r .fingerprint plan.json
 ```
+### How to cite this release
+
+If you use PPDS for technical evaluation, prototyping, or integration experiments, please cite the exact release tag to ensure reproducibility:
+
+- **Repository:** `privacy-preserving-data-systems`
+- **Release tag:** `v0.1.0`
+- **URL:** https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v0.1.0
+
+For best reproducibility, also record the plan fingerprint produced by:
+
+```bash
+ppds plan --policy policy.yaml --features features.yaml --out plan.json
+jq -r .fingerprint plan.json

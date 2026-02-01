@@ -61,4 +61,133 @@ Together, these documents specify a complete **privacy-aware data usage framewor
 that is threat-grounded, structurally enforced, and auditable by design.
 
 
+## Quickstart
 
+> **Goal:** In ~3 minutes, validate a policy, generate an auditable PPDS plan, and emit SQL-compatible outputs for warehouse integration.
+
+### Prerequisites
+- Python **3.10+**
+- `pip` (recommended: run inside a virtualenv)
+
+### Install
+
+**Option A — Install a pinned release (recommended for reproducibility)**
+
+```bash
+pip install "ppds @ git+https://github.com/tina77fritz/privacy-preserving-data-systems@v0.1.0"
+```
+**Option B — Install latest from `main` (for development)**
+
+```bash
+pip install "ppds @ git+https://github.com/tina77fritz/privacy-preserving-data-systems@main"
+```
+
+Verify:
+```bash
+ppds --version
+```
+
+1) Validate configuration (fail-closed)
+
+Validate your policy + feature specifications. Invalid configs must hard-fail with structured reasons (non-zero exit code).
+
+```bash
+ppds validate \
+  --policy examples/configs/policy_min.yaml \
+  --features examples/configs/features_min.yaml \
+  --format json
+```
+
+**Expected behavior**
+- ✅ Exit code `0` if valid
+- ❌ Non-zero exit code + JSON error payload if invalid (e.g., weights don’t sum to 1, thresholds out of range, missing required fields)
+
+---
+
+### 2) Generate an auditable plan (`plan.json`)
+
+Generate a deterministic and auditable plan that captures decisions, constraints, and reasons.
+
+```bash
+ppds plan \
+  --policy examples/configs/policy_min.yaml \
+  --features examples/configs/features_min.yaml \
+  --out plan.json
+```
+
+`plan.json` is designed to be:
+
+- **Auditable:** includes structured reasons (scores, thresholds, rule hits)
+- **Deterministic:** includes a fingerprint for reproducible runs
+- **Integration-ready:** includes planner/warehouse friendly constraints
+
+**Example (illustrative):**
+
+```json
+{
+  "schema_version": 1,
+  "fingerprint": "sha256:…",
+  "decision": {
+    "route": "local_only",
+    "granularity": "coarse"
+  },
+  "constraints": [
+    {
+      "type": "deny_join",
+      "key": "user_id"
+    }
+  ],
+  "reasons": {
+    "lps": {
+      "total": 0.83,
+      "components": {
+        "linkability": 0.25,
+        "uniqueness": 0.30,
+        "inferability": 0.28
+      },
+      "thresholds_hit": ["stable_join_key", "high_sparsity"]
+    },
+    "policy": {
+      "fail_closed": true,
+      "rejection_reasons": []
+    }
+  }
+}
+```
+
+## 3) Emit SQL-compatible outputs
+
+Translate a plan into SQL snippets for warehouse integration.
+
+```bash
+ppds emit-sql \
+  --plan plan.json \
+  --dialect spark \
+  --out query.sql
+```
+
+## 4) Explain (optional): human-readable audit report
+
+```bash
+ppds explain --plan plan.json --format md > audit_report.md
+```
+
+This produces a reviewer-friendly report summarizing:
+
+- Why a feature was routed / rejected
+- Which thresholds were hit
+- How LPS components contributed to the final decision
+
+## Reproducibility / Citation
+
+To reproduce planning behavior in technical evaluations, always reference:
+
+1. the release tag (e.g., v0.1.0) and
+2. the generated plan's fingerprint
+
+**Example:**
+```bash
+python -c "import ppds; print(ppds.__version__)"
+ppds plan --policy policy.yaml --features features.yaml --out plan.json
+jq -r .fingerprint plan.json
+```

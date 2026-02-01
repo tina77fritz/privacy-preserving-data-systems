@@ -1,13 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ppds"
 version = "0.1.0"
 description = "Privacy-Preserving Data Systems: LPS scoring, routing, planning, and budget ledger"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "pyyaml>=6.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
 
+[project.scripts]
+ppds = "ppds.cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+

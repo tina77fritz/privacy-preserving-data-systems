@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Dict, List, Tuple
 
-from .types import Boundary, Granularity, FeatureSpec, PolicyThresholds, Scorecard
+from ..types import Boundary, Granularity, FeatureSpec, PolicyThresholds, Scorecard
 
 
 def _clamp01(x: float) -> float:
@@ -50,7 +50,7 @@ def compute_uniqueness(feature: FeatureSpec, g: Granularity, k_min: int) -> Tupl
         U = _clamp01(1.0 / max(1.0, ratio))
         return U, [("support_hint", U)]
 
-    # Cold start: approximate “cell sparsity pressure”
+    # Cold start: approximate "cell sparsity pressure"
     # based on bucket counts and high-cardinality dimensions.
     pressure = 0.0
     for f in feature.fields:
@@ -111,7 +111,7 @@ def compute_inferability(feature: FeatureSpec) -> Tuple[float, List[Tuple[str, f
 
 def compute_policy_penalty(feature: FeatureSpec) -> Tuple[float, List[Tuple[str, float]]]:
     """
-    Policy penalty: rule-based “regulated dimension” multiplier.
+    Policy penalty: rule-based "regulated dimension" multiplier.
     """
     contrib: List[Tuple[str, float]] = []
     penalty = 0.0

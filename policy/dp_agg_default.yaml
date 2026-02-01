@@ -1,0 +1,107 @@
+# DP Aggregation Policy for SQL queries.
+# This policy is meant to be stored centrally (e.g., system table / PD-backed config),
+# versioned, auditable, and hot-reloadable.
+
+policy_id: "dp_agg_default"
+version: 1
+owner: "privacy-eng"
+updated_at: "2026-01-31T00:00:00Z"
+
+# CLI thresholds for LPS evaluation (used when this policy is loaded via --policy).
+thresholds:
+  lps_max: 0.5
+  reject_on_violation: true
+
+# Budget accounting configuration.
+accounting:
+  mode: "per_tenant_per_day"          # Options: per_tenant_per_day, per_user_per_day, per_query
+  accountant: "rdp"                   # Options: rdp, zcdp, basic
+  budget:
+    epsilon_daily: 5.0
+    delta_daily: 1e-6
+  on_budget_exhausted: "deny"         # Options: deny, degrade, log_only
+
+# Rules are matched against a query plan (tables, joins, group keys, aggregates, hints).
+rules:
+  - rule_id: "r1_fact_dim_join_groupby"
+
+    # Require explicit opt-in to avoid accidental DP behavior.
+    # Example SQL: SELECT /*+ DP_AGG(policy='dp_agg_default') */ ...
+    require_hint: true
+
+    # Identify the privacy unit.
+    identity:
+      user_id_column: "fact.user_id"  # Must resolve to a column in the logical plan.
+
+    # Restrict and bound joins to avoid contribution amplification.
+    joins:
+      # We treat one "fact" table as the only table that carries user_id.
+      # Other tables must be "dimensions" joined in a bounded way.
+      fact_table: "analytics.fact_events"
+      allowed_joins:
+        - dim_table: "analytics.dim_city"
+          join_type: "inner"          # Options: inner, left (MVP), etc.
+          on:
+            - left: "fact.city_id"
+              right: "dim_city.city_id"
+          # Enforce join multiplicity to prevent row explosion:
+          # The join key in the dimension table must be unique (1:1 from fact -> dim),
+          # or the multiplicity must be bounded by a small constant.
+          dim_key_uniqueness_required: true
+          max_dim_multiplicity: 1
+
+        - dim_table: "analytics.dim_device"
+          join_type: "left"
+          on:
+            - left: "fact.device_type_id"
+              right: "dim_device.device_type_id"
+          dim_key_uniqueness_required: true
+          max_dim_multiplicity: 1
+
+    # Contribution bounding per user across groups and within each group.
+    contribution_bounds:
+      # Maximum number of distinct groups (partitions) a user can affect.
+      max_groups_contributed: 3
+      # Maximum number of rows per user within a single group after joins.
+      max_rows_per_group: 1
+      # If the query would exceed caps, choose a deterministic strategy for truncation.
+      # Options: truncate, sample, error
+      cap_strategy: "truncate"
+
+    # Group-by restrictions (optional but strongly recommended for safety and predictability).
+    group_by:
+      allowed_keys:
+        - "dim_city.city"
+        - "fact.day_bucket"
+      max_group_keys: 2
+
+    # Allowed DP aggregates with required clipping bounds for numeric measures.
+    aggregates:
+      allow:
+        - fn: "count_distinct_user"   # Interpreted as DP count over users, not raw rows.
+        - fn: "sum"
+          column: "fact.amount"
+          clip:
+            min: 0.0
+            max: 200.0
+
+    # DP noise mechanism for aggregates.
+    mechanism:
+      type: "gaussian"                # Options: gaussian, laplace
+      epsilon: 0.5
+      delta: 1e-7
+
+    # DP partition selection for thresholding / suppression.
+    release:
+      # Optional business-level minimum. This is NOT DP-safe by itself.
+      # If present, it must be applied only after DP partition selection
+      # or as an internal filter not exposed to the user.
+      min_group_size: 10
+
+      partition_selection:
+        method: "noisy_threshold"     # Options: noisy_threshold, dp_topk (future)
+        epsilon: 0.2
+        delta: 1e-7
+        threshold: 20                 # A tunable tau for noisy count thresholding.
+      on_suppressed: "drop"           # Options: drop, null_out
+      audit: true

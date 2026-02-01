@@ -108,16 +108,20 @@ def _attach_planner_constraints(dec: Decision, pc: PlannerConstraint) -> Decisio
     """
     payload = pc.to_json_dict()
 
-    # 1) Try dataclass field update (preferred for clean typing)
-    try:
-        return replace(dec, planner_constraint=pc, planner_constraints_json=payload)  # type: ignore[arg-type]
-    except TypeError:
-        pass
+    def _attach_planner_constraints(dec: Decision, pc: PlannerConstraint) -> Decision:
+        payload = pc.to_json_dict()
+        return replace(dec, planner_constraint=pc, planner_constraints_json=payload)
 
-    # 2) Fallback: dynamic attributes (keeps API stable without changing .types)
-    setattr(dec, "planner_constraint", pc)
-    setattr(dec, "planner_constraints_json", payload)
-    return dec
+    # # 1) Try dataclass field update (preferred for clean typing)
+    # try:
+    #     return replace(dec, planner_constraint=pc, planner_constraints_json=payload)  # type: ignore[arg-type]
+    # except TypeError:
+    #     pass
+
+    # # 2) Fallback: dynamic attributes (keeps API stable without changing .types)
+    # setattr(dec, "planner_constraint", pc)
+    # setattr(dec, "planner_constraints_json", payload)
+    # return dec
 
 
 # =============================================================================

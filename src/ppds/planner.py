@@ -108,10 +108,7 @@ def _attach_planner_constraints(dec: Decision, pc: PlannerConstraint) -> Decisio
     """
     payload = pc.to_json_dict()
 
-    def _attach_planner_constraints(dec: Decision, pc: PlannerConstraint) -> Decision:
-        payload = pc.to_json_dict()
-        return replace(dec, planner_constraint=pc, planner_constraints_json=payload)
-
+    return replace(dec, planner_constraint=pc, planner_constraints_json=payload)
     # # 1) Try dataclass field update (preferred for clean typing)
     # try:
     #     return replace(dec, planner_constraint=pc, planner_constraints_json=payload)  # type: ignore[arg-type]

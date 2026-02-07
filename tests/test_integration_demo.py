@@ -1,7 +1,3 @@
-
-
-### `tests/test_integration_demo.py`
-```python
 import json
 import subprocess
 from pathlib import Path

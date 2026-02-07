@@ -1,0 +1,8 @@
+{
+  "name": "demo_feature",
+  "fields": [
+    {"name": "user_id", "is_identifier": true, "is_sensitive": false},
+    {"name": "age", "is_identifier": false, "is_sensitive": true}
+  ],
+  "bucketizations": {}
+}

@@ -7,6 +7,13 @@ from .types import FieldSpec, JoinKeySpec, FeatureSpec, PolicyThresholds, Bounda
 from .planner import decide, plan_counterfactuals
 from .budget import BudgetLedger, SpendEvent
 
+from pathlib import Path
+
+def _write_text(path: str, text: str) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
 
 def main():
     th = PolicyThresholds(

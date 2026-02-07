@@ -1,5 +1,15 @@
 {
   "thresholds": {
-    "k_min": 2
+    "k_min": 2,
+    "tau_boundary": {
+      "LOCAL": 0.90,
+      "SHUFFLE": 0.70,
+      "CENTRAL": 0.55
+    },
+    "tau_granularity": {
+      "ITEM": 0.45,
+      "CLUSTER": 0.60,
+      "AGGREGATE": 0.75
+    }
   }
 }

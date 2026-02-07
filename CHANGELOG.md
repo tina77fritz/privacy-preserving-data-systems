@@ -39,3 +39,15 @@ Release notes prioritize: auditability, deterministic behavior, and integration 
 - Enforced fail-closed behavior: inputs violating policy thresholds are deterministically rejected with audit-visible reasons.
 
 [0.1.0]: https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v0.1.0
+
+
+## [0.1.1] - 2026-02-7
+### Added
+- integration demo (configs + scheduled job example)
+- end-to-end test validating validate → plan → emit-sql
+
+### Changed
+- CI now runs on pull requests (PR checks)
+
+
+[0.1.1]: 

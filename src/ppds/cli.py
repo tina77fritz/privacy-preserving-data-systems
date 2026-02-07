@@ -63,31 +63,26 @@ def _validate_policy_features(policy: Dict[str, Any], features: Dict[str, Any]) 
 
 
 def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
-    """
-    Build PolicyThresholds from JSON.
-
-    Expected schema:
-    {
-      "thresholds": {
-        "k_min": 100,
-        "tau_boundary": {"LOCAL": 0.9, "SHUFFLE": 0.7, "CENTRAL": 0.55},
-        "tau_granularity": {"ITEM": 0.45, "CLUSTER": 0.60, "AGGREGATE": 0.75}
-      }
-    }
-    """
     th = policy["thresholds"]
 
-    tau_b_raw = th.get("tau_boundary", {})
-    tau_g_raw = th.get("tau_granularity", {})
+    # defaults (from your demo)
+    tau_boundary = {
+        Boundary.LOCAL: 0.90,
+        Boundary.SHUFFLE: 0.70,
+        Boundary.CENTRAL: 0.55,
+    }
+    tau_granularity = {
+        Granularity.ITEM: 0.45,
+        Granularity.CLUSTER: 0.60,
+        Granularity.AGGREGATE: 0.75,
+    }
 
-    tau_boundary = {}
-    for k, v in tau_b_raw.items():
-        # allow either enum name strings or enum values
+    # override from config (optional)
+    for k, v in (th.get("tau_boundary", {}) or {}).items():
         b = Boundary[k] if isinstance(k, str) and k in Boundary.__members__ else Boundary(k)
         tau_boundary[b] = float(v)
 
-    tau_granularity = {}
-    for k, v in tau_g_raw.items():
+    for k, v in (th.get("tau_granularity", {}) or {}).items():
         g = Granularity[k] if isinstance(k, str) and k in Granularity.__members__ else Granularity(k)
         tau_granularity[g] = float(v)
 
@@ -96,6 +91,7 @@ def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
         tau_granularity=tau_granularity,
         k_min=int(th.get("k_min", 1)),
     )
+
 
 
 def _to_feature_spec(features: Dict[str, Any]) -> FeatureSpec:

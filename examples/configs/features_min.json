@@ -1,8 +1,13 @@
 {
-  "name": "demo_feature",
+  "feature_id": "demo_feature",
+  "description": "demo feature for integration test",
   "fields": [
-    {"name": "user_id", "is_identifier": true, "is_sensitive": false},
-    {"name": "age", "is_identifier": false, "is_sensitive": true}
+    {"name": "user_id", "dtype": "string", "is_identifier": true, "is_sensitive": false},
+    {"name": "age", "dtype": "int", "is_identifier": false, "is_sensitive": true}
   ],
-  "bucketizations": {}
+  "bucketizations": {},
+  "join_keys": [],
+  "ttl_days": 30,
+  "policy_tags": [],
+  "support_hint": {}
 }

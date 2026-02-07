@@ -51,4 +51,4 @@ Release notes prioritize: auditability, deterministic behavior, and integration 
 - CI now runs on pull requests (PR checks)
 
 
-[0.1.1]: https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v0.1.1
+[0.1.1]: [https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v0.1.1](https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v.0.1.1)

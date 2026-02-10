@@ -1,0 +1,118 @@
+name: PPDS Verification Pack
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (editable)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      - name: Unit tests
+        run: |
+          pytest -q
+
+      - name: E2E - validate -> plan -> emit-sql -> explain
+        run: |
+          set -e
+          mkdir -p artifacts
+
+          # Record version for reproducibility
+          ppds --version | tee artifacts/ppds_version.txt
+
+          # 1) Validate (fail-closed)
+          ppds validate \
+            --policy examples/configs/policy_min.yaml \
+            --features examples/configs/features_min.yaml \
+            --format json \
+            | tee artifacts/validate_result.json
+
+          # 2) Generate auditable plan
+          ppds plan \
+            --policy examples/configs/policy_min.yaml \
+            --features examples/configs/features_min.yaml \
+            --out artifacts/plan.json
+
+          # Record plan fingerprint (deterministic verification anchor)
+          python - << 'PY'
+          import json
+          p = json.load(open("artifacts/plan.json","r",encoding="utf-8"))
+          fp = p.get("fingerprint","")
+          open("artifacts/plan_fingerprint.txt","w",encoding="utf-8").write(fp + "\n")
+          print("fingerprint:", fp)
+          PY
+
+          # 3) Emit SQL-compatible outputs
+          ppds emit-sql \
+            --plan artifacts/plan.json \
+            --dialect spark \
+            --out artifacts/query.sql
+
+          # 4) Explain - human-readable audit report
+          ppds explain --plan artifacts/plan.json --format md > artifacts/audit_report.md
+
+          # Create NIW-friendly summary page (for quick review)
+          python - << 'PY'
+          import json, os, hashlib
+          from datetime import datetime, timezone
+
+          def sha256_file(path):
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+              for b in iter(lambda: f.read(8192), b""):
+                h.update(b)
+            return h.hexdigest()
+
+          plan = json.load(open("artifacts/plan.json","r",encoding="utf-8"))
+          fp = open("artifacts/plan_fingerprint.txt","r",encoding="utf-8").read().strip()
+          ppds_version = open("artifacts/ppds_version.txt","r",encoding="utf-8").read().strip()
+
+          summary = []
+          summary.append("# Verification Summary (CI Replay)")
+          summary.append("")
+          summary.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
+          summary.append(f"- PPDS version: {ppds_version}")
+          summary.append("")
+          summary.append("## Fixed Inputs")
+          summary.append("- policy: examples/configs/policy_min.yaml")
+          summary.append("- features: examples/configs/features_min.yaml")
+          summary.append("")
+          summary.append("## Outputs (Artifacts)")
+          summary.append(f"- plan.json fingerprint: `{fp}`")
+          summary.append(f"- plan.json sha256: `{sha256_file('artifacts/plan.json')}`")
+          summary.append(f"- query.sql sha256: `{sha256_file('artifacts/query.sql')}`")
+          summary.append(f"- audit_report.md sha256: `{sha256_file('artifacts/audit_report.md')}`")
+          summary.append("")
+          summary.append("## What this verifies")
+          summary.append("- Fail-closed validation (CLI validate succeeds only if inputs meet rules).")
+          summary.append("- A plan is produced with traceable records (audit report + plan).")
+          summary.append("- Integration output is produced (SQL).")
+          summary.append("- The fingerprint provides a stable anchor for independent review.")
+          summary.append("")
+
+          open("artifacts/verification_summary.md","w",encoding="utf-8").write("\n".join(summary))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppds-verification-pack
+          path: artifacts/

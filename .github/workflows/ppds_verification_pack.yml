@@ -21,8 +21,7 @@ jobs:
           set -euo pipefail
           grep -RIn "^\s*checks\s*=" .github/workflows || true
           grep -RIn "^\s*summary\s*=" .github/workflows || true
-          grep -RIn "^\s*open\(" .github/workflows || true
-
+          grep -RInE "^\s*open\(" .github/workflows || true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -39,16 +38,17 @@ jobs:
         run: |
           pytest -q || true
 
-      # ---------- KEY FIX #1: auto-locate JSON configs ----------
       - name: Resolve minimal example configs (JSON)
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "Listing examples/ (for debug):"
           if [ -d "examples" ]; then
             find examples -maxdepth 4 -type f | sed 's/^/ - /'
           else
-            echo "No examples/ folder found."
+            echo "::error::No examples/ folder found."
+            exit 1
           fi
 
           POLICY=$(find examples -maxdepth 4 -type f \
@@ -61,40 +61,38 @@ jobs:
 
           if [ -z "$POLICY" ] || [ -z "$FEATURES" ]; then
             echo "::error::Could not find minimal JSON configs for policy/features under examples/."
-            echo "::error::Please ensure you have minimal JSON configs in examples/ (policy_min*.json, features_min*.json)."
             exit 1
           fi
 
           echo "POLICY_PATH=$POLICY" >> $GITHUB_ENV
           echo "FEATURES_PATH=$FEATURES" >> $GITHUB_ENV
 
-          echo "Using POLICY_PATH=$POLICY"
-          echo "Using FEATURES_PATH=$FEATURES"
-
       - name: E2E - validate -> plan -> emit-sql (+ audit summary)
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p artifacts
 
-          # Reproducibility anchors (no ppds --version needed)
           git rev-parse HEAD | tee artifacts/git_commit.txt
           python -c "import sys; print(sys.version.replace('\n',' '))" | tee artifacts/python_version.txt
           pip freeze | tee artifacts/pip_freeze.txt
 
-          # 1) Validate (fail-closed if invalid)
           ppds validate \
             --policy "$POLICY_PATH" \
             --features "$FEATURES_PATH" \
             --format json \
             | tee artifacts/validate_result.json
 
-          # 2) Plan (auditable plan.json)
           ppds plan \
             --policy "$POLICY_PATH" \
             --features "$FEATURES_PATH" \
             --out artifacts/plan.json
 
-          # Extract fingerprint + soft checks
+          ppds emit-sql \
+            --plan artifacts/plan.json \
+            --dialect spark \
+            --out artifacts/query.sql
+
           python - <<'PY'
           import json, hashlib, os
           from datetime import datetime, timezone
@@ -107,23 +105,24 @@ jobs:
             return h.hexdigest()
           
           plan_path = "artifacts/plan.json"
+          sql_path  = "artifacts/query.sql"
+          
           plan = json.load(open(plan_path, "r", encoding="utf-8"))
-          
           plan_sha = sha256_file(plan_path)
+          sql_sha  = sha256_file(sql_path)
           
-          # Native fingerprint may be null in current PPDS output
           native_fp = plan.get("fingerprint")
           fp_final = native_fp if (isinstance(native_fp, str) and native_fp.strip()) else f"sha256:{plan_sha}"
           
-          # Always write a usable fingerprint anchor
           open("artifacts/plan_fingerprint.txt", "w", encoding="utf-8").write(fp_final + "\n")
+          open("artifacts/query_sql_sha256.txt","w",encoding="utf-8").write(sql_sha + "\n")
           
-          # Audit report (schema-flexible, no 'explain' command needed)
           audit = []
           audit.append("# PPDS Plan Audit Report (CI Replay)")
           audit.append("")
           audit.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
           audit.append(f"- Plan SHA256: `{plan_sha}`")
+          audit.append(f"- SQL SHA256: `{sql_sha}`")
           audit.append(f"- Fingerprint used: `{fp_final}`" + (" (native)" if (isinstance(native_fp, str) and native_fp.strip()) else " (derived)"))
           audit.append("")
           audit.append("## Top-level keys present")
@@ -140,20 +139,20 @@ jobs:
               audit.append("")
           
           open("artifacts/audit_report.md", "w", encoding="utf-8").write("\n".join(audit))
-
-          # 3) Emit SQL (integration output)
-          ppds emit-sql \
-            --plan artifacts/plan.json \
-            --dialect spark \
-            --out artifacts/query.sql
-
-          # Record SQL SHA
-          python - << 'PY'
-          import hashlib
-          p="artifacts/query.sql"
-          h=hashlib.sha256(open(p,"rb").read()).hexdigest()
-          open("artifacts/query_sql_sha256.txt","w",encoding="utf-8").write(h+"\n")
-          print("query.sql sha256:", h)
+          
+          summary = []
+          summary.append("# Verification Summary (CI Replay)")
+          summary.append("")
+          summary.append("## Fixed Inputs")
+          summary.append(f"- policy: `{os.environ.get('POLICY_PATH','')}`")
+          summary.append(f"- features: `{os.environ.get('FEATURES_PATH','')}`")
+          summary.append("")
+          summary.append("## Outputs")
+          summary.append(f"- plan fingerprint used: `{fp_final}`")
+          summary.append(f"- plan.json sha256: `{plan_sha}`")
+          summary.append(f"- query.sql sha256: `{sql_sha}`")
+          summary.append("")
+          open("artifacts/verification_summary.md", "w", encoding="utf-8").write("\n".join(summary))
           PY
 
       - name: Upload artifacts

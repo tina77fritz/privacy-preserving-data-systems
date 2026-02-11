@@ -15,16 +15,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Debug - find stray lines commands
+      - name: Debug - find stray python fragments
         shell: bash
         run: |
           set -euo pipefail
-          echo "Workflows:"
-          ls -la .github/workflows || true
-          echo "Search for suspicious 'lines' usage in workflow files:"
-          grep -RIn "^\s*lines\s*=" .github/workflows || true
-          grep -RIn "^\s*lines\." .github/workflows || true
-          grep -RIn "^\s*lines\b" .github/workflows || true
+          grep -RIn "^\s*checks\s*=" .github/workflows || true
+          grep -RIn "^\s*summary\s*=" .github/workflows || true
+          grep -RIn "^\s*open\(" .github/workflows || true
 
 
       - name: Setup Python

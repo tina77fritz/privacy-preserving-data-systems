@@ -167,30 +167,6 @@ jobs:
 
 
 
-          # Generate a human-readable audit report (schema-flexible)
-          lines = []
-          lines.append("# PPDS Plan Audit Report (CI Replay)")
-          lines.append("")
-          lines.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
-          lines.append(f"- Plan SHA256: `{sha256_file(plan_path)}`")
-          lines.append(f"- Fingerprint: `{fp}`" if fp else "- Fingerprint: (missing)")
-          if "schema_version" in plan:
-            lines.append(f"- schema_version: `{plan.get('schema_version')}`")
-          lines.append("")
-          lines.append("## Top-level fields present")
-          for k in sorted(plan.keys()):
-            lines.append(f"- {k}")
-          lines.append("")
-          # If present, include structured decision info (without assuming exact schema)
-          for section in ["decision", "reasons", "controls", "rules", "routing"]:
-            if section in plan:
-              lines.append(f"## {section}")
-              lines.append("```json")
-              lines.append(json.dumps(plan.get(section), indent=2, sort_keys=True))
-              lines.append("```")
-              lines.append("")
-          open(md_path,"w",encoding="utf-8").write("\n".join(lines))
-
           # Verification summary 
           checks = {
             "plan_json_valid": True,

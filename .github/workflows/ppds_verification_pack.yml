@@ -86,47 +86,73 @@ jobs:
             --out artifacts/plan.json
 
           # Extract fingerprint + soft checks
-          python - << 'PY'
-          import json, hashlib
+          python - <<'PY'
+          import json, hashlib, os
           from datetime import datetime, timezone
           
           def sha256_file(path):
-            h=hashlib.sha256()
-            with open(path,"rb") as f:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
               for b in iter(lambda: f.read(8192), b""):
                 h.update(b)
             return h.hexdigest()
           
-          plan_path="artifacts/plan.json"
-          plan=json.load(open(plan_path,"r",encoding="utf-8"))
+          plan_path = "artifacts/plan.json"
+          plan = json.load(open(plan_path, "r", encoding="utf-8"))
           
-          plan_sha=sha256_file(plan_path)
+          plan_sha = sha256_file(plan_path)
+          
+          # Native fingerprint may be null in current PPDS output
           native_fp = plan.get("fingerprint")
-          derived_fp = f"sha256:{plan_sha}"
-          fp_final = native_fp if (isinstance(native_fp,str) and native_fp.strip()) else derived_fp
+          fp_final = native_fp if (isinstance(native_fp, str) and native_fp.strip()) else f"sha256:{plan_sha}"
           
-          open("artifacts/plan_fingerprint.txt","w",encoding="utf-8").write(fp_final+"\n")
+          # Always write a usable fingerprint anchor
+          open("artifacts/plan_fingerprint.txt", "w", encoding="utf-8").write(fp_final + "\n")
           
-          summary=[]
+          # Audit report (schema-flexible, no 'explain' command needed)
+          audit = []
+          audit.append("# PPDS Plan Audit Report (CI Replay)")
+          audit.append("")
+          audit.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
+          audit.append(f"- Plan SHA256: `{plan_sha}`")
+          audit.append(f"- Fingerprint used: `{fp_final}`" + (" (native)" if (isinstance(native_fp, str) and native_fp.strip()) else " (derived)"))
+          audit.append("")
+          audit.append("## Top-level keys present")
+          for k in sorted(plan.keys()):
+            audit.append(f"- {k}")
+          audit.append("")
+          
+          for section in ["decision", "reasons"]:
+            if section in plan:
+              audit.append(f"## {section}")
+              audit.append("```json")
+              audit.append(json.dumps(plan.get(section), indent=2, sort_keys=True))
+              audit.append("```")
+              audit.append("")
+          
+          open("artifacts/audit_report.md", "w", encoding="utf-8").write("\n".join(audit))
+          
+          # 1-page reviewer summary
+          summary = []
           summary.append("# Verification Summary (CI Replay)")
           summary.append("")
-          summary.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
+          summary.append("## Fixed Inputs")
+          summary.append(f"- policy: `{os.environ.get('POLICY_PATH','')}`")
+          summary.append(f"- features: `{os.environ.get('FEATURES_PATH','')}`")
           summary.append("")
           summary.append("## Outputs")
+          summary.append(f"- plan fingerprint: `{fp_final}`")
           summary.append(f"- plan.json sha256: `{plan_sha}`")
-          summary.append(f"- fingerprint used: `{fp_final}`")
-          if native_fp:
-            summary.append("- fingerprint source: plan.json (native)")
-          else:
-            summary.append("- fingerprint source: derived from plan.json content (CI)")
-          
           summary.append("")
           summary.append("## Checks")
-          summary.append(f"- Plan JSON valid: PASS")
-          summary.append(f"- Fingerprint present: PASS (derived)" if not native_fp else "Fingerprint present: PASS (native)")
-          
-          open("artifacts/verification_summary.md","w",encoding="utf-8").write("\n".join(summary))
+          summary.append("- Plan JSON valid: PASS")
+          summary.append(f"- Fingerprint present: {'PASS (native)' if (isinstance(native_fp, str) and native_fp.strip()) else 'PASS (derived)'}")
+          summary.append(f"- Structured decision present: {'PASS' if 'decision' in plan else 'WARN'}")
+          summary.append(f"- Structured reasons present: {'PASS' if 'reasons' in plan else 'WARN'}")
+          summary.append("")
+          open("artifacts/verification_summary.md", "w", encoding="utf-8").write("\n".join(summary))
           PY
+
 
 
           # Generate a human-readable audit report (schema-flexible)

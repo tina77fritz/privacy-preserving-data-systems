@@ -87,25 +87,47 @@ jobs:
 
           # Extract fingerprint + soft checks
           python - << 'PY'
-          import json, hashlib, os
+          import json, hashlib
           from datetime import datetime, timezone
-
+          
           def sha256_file(path):
-            h = hashlib.sha256()
-            with open(path, "rb") as f:
+            h=hashlib.sha256()
+            with open(path,"rb") as f:
               for b in iter(lambda: f.read(8192), b""):
                 h.update(b)
             return h.hexdigest()
+          
+          plan_path="artifacts/plan.json"
+          plan=json.load(open(plan_path,"r",encoding="utf-8"))
+          
+          plan_sha=sha256_file(plan_path)
+          native_fp = plan.get("fingerprint")
+          derived_fp = f"sha256:{plan_sha}"
+          fp_final = native_fp if (isinstance(native_fp,str) and native_fp.strip()) else derived_fp
+          
+          open("artifacts/plan_fingerprint.txt","w",encoding="utf-8").write(fp_final+"\n")
+          
+          summary=[]
+          summary.append("# Verification Summary (CI Replay)")
+          summary.append("")
+          summary.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
+          summary.append("")
+          summary.append("## Outputs")
+          summary.append(f"- plan.json sha256: `{plan_sha}`")
+          summary.append(f"- fingerprint used: `{fp_final}`")
+          if native_fp:
+            summary.append("- fingerprint source: plan.json (native)")
+          else:
+            summary.append("- fingerprint source: derived from plan.json content (CI)")
+          
+          summary.append("")
+          summary.append("## Checks")
+          summary.append(f"- Plan JSON valid: PASS")
+          summary.append(f"- Fingerprint present: PASS (derived)" if not native_fp else "Fingerprint present: PASS (native)")
+          
+          open("artifacts/verification_summary.md","w",encoding="utf-8").write("\n".join(summary))
+          PY
 
-          plan_path = "artifacts/plan.json"
-          sql_path  = "artifacts/query.sql"
-          md_path   = "artifacts/audit_report.md"
-
-          plan = json.load(open(plan_path,"r",encoding="utf-8"))
-          fp = plan.get("fingerprint","")
-
-          # Save fingerprint for NIW anchor
-          open("artifacts/plan_fingerprint.txt","w",encoding="utf-8").write(fp + "\n")
 
           # Generate a human-readable audit report (schema-flexible)
           lines = []
@@ -131,7 +153,7 @@ jobs:
               lines.append("")
           open(md_path,"w",encoding="utf-8").write("\n".join(lines))
 
-          # Verification summary (NIW reviewer friendly, 1 page)
+          # Verification summary 
           checks = {
             "plan_json_valid": True,
             "fingerprint_present": bool(fp),

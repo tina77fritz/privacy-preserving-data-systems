@@ -140,68 +140,6 @@ jobs:
               audit.append("")
           
           open("artifacts/audit_report.md", "w", encoding="utf-8").write("\n".join(audit))
-          
-          # 1-page reviewer summary
-          summary = []
-          summary.append("# Verification Summary (CI Replay)")
-          summary.append("")
-          summary.append("## Fixed Inputs")
-          summary.append(f"- policy: `{os.environ.get('POLICY_PATH','')}`")
-          summary.append(f"- features: `{os.environ.get('FEATURES_PATH','')}`")
-          summary.append("")
-          summary.append("## Outputs")
-          summary.append(f"- plan fingerprint: `{fp_final}`")
-          summary.append(f"- plan.json sha256: `{plan_sha}`")
-          summary.append("")
-          summary.append("## Checks")
-          summary.append("- Plan JSON valid: PASS")
-          summary.append(f"- Fingerprint present: {'PASS (native)' if (isinstance(native_fp, str) and native_fp.strip()) else 'PASS (derived)'}")
-          summary.append(f"- Structured decision present: {'PASS' if 'decision' in plan else 'WARN'}")
-          summary.append(f"- Structured reasons present: {'PASS' if 'reasons' in plan else 'WARN'}")
-          summary.append("")
-          open("artifacts/verification_summary.md", "w", encoding="utf-8").write("\n".join(summary))
-          PY
-
-
-
-          # Verification summary 
-          checks = {
-            "plan_json_valid": True,
-            "fingerprint_present": bool(fp),
-            "decision_present": "decision" in plan,
-            "reasons_present": "reasons" in plan,
-            "generated_files": {
-              "plan.json": os.path.exists(plan_path),
-              "audit_report.md": os.path.exists(md_path),
-            }
-          }
-          open("artifacts/verification_checks.json","w",encoding="utf-8").write(
-            json.dumps(checks, indent=2, sort_keys=True) + "\n"
-          )
-
-          summary = []
-          summary.append("# Verification Summary (CI Replay)")
-          summary.append("")
-          summary.append("## Fixed Inputs")
-          summary.append(f"- policy: `{os.environ.get('POLICY_PATH','')}`")
-          summary.append(f"- features: `{os.environ.get('FEATURES_PATH','')}`")
-          summary.append("")
-          summary.append("## Outputs")
-          summary.append(f"- plan fingerprint: `{fp}`" if fp else "- plan fingerprint: (missing)")
-          summary.append(f"- plan.json sha256: `{sha256_file(plan_path)}`")
-          summary.append("")
-          summary.append("## Checks (Pass/Fail)")
-          summary.append(f"- Plan JSON valid: {'PASS' if checks['plan_json_valid'] else 'FAIL'}")
-          summary.append(f"- Fingerprint present: {'PASS' if checks['fingerprint_present'] else 'FAIL'}")
-          summary.append(f"- Structured decision present: {'PASS' if checks['decision_present'] else 'WARN'}")
-          summary.append(f"- Structured reasons present: {'PASS' if checks['reasons_present'] else 'WARN'}")
-          summary.append("")
-          summary.append("## Interpretation (plain language)")
-          summary.append("- This run reproduces the system’s end-to-end behavior from fixed inputs.")
-          summary.append("- The plan artifact provides an auditable record; the fingerprint anchors reproducibility.")
-          summary.append("")
-          open("artifacts/verification_summary.md","w",encoding="utf-8").write("\n".join(summary))
-          PY
 
           # 3) Emit SQL (integration output)
           ppds emit-sql \

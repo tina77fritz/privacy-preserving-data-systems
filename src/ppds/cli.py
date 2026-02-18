@@ -19,6 +19,11 @@ from .types import (
 from .planner import decide, plan_counterfactuals
 from .budget import BudgetLedger, SpendEvent
 
+import hashlib
+from datetime import datetime, timezone
+from .errors import ExitCode, PPDSException, PPDSProblem, problem_to_dict
+
+
 
 # =============================================================================
 # Helpers
@@ -27,11 +32,35 @@ from .budget import BudgetLedger, SpendEvent
 def _load_json(path: str) -> Dict[str, Any]:
     p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(f"Config not found: {path}")
-    obj = json.loads(p.read_text(encoding="utf-8"))
+        _raise_config_error(
+            "PPDS_CONFIG_NOT_FOUND",
+            f"Config not found: {path}",
+            details={"path": path},
+            remediation="Verify the path is correct and the file exists.",
+        )
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise PPDSException(
+            PPDSProblem(
+                code="PPDS_CONFIG_PARSE_ERROR",
+                category="config",
+                message=f"Failed to parse JSON: {path}",
+                details={"path": path, "error": repr(e)},
+                remediation="Ensure the file is valid JSON encoded in UTF-8.",
+            ),
+            ExitCode.CONFIG_INVALID,
+            cause=e,
+        )
     if not isinstance(obj, dict):
-        raise ValueError(f"Config must be a JSON object at top-level: {path}")
+        _raise_config_error(
+            "PPDS_CONFIG_TOPLEVEL_NOT_OBJECT",
+            f"Config must be a JSON object at top-level: {path}",
+            details={"path": path, "type": type(obj).__name__},
+            remediation="Wrap the config in a JSON object (dictionary) at the top-level.",
+        )
     return obj
+
 
 
 def _write_text(path: str, text: str) -> None:
@@ -144,6 +173,45 @@ def _to_feature_spec(features: Dict[str, Any]) -> FeatureSpec:
         support_hint=dict(features.get("support_hint", {}) or {}),
     )
 
+def _print_payload(payload: Dict[str, Any], fmt: str) -> None:
+    if fmt == "json":
+        print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True, default=str))
+    elif fmt == "jsonl":
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
+    else:
+        # text mode: do nothing here; caller prints user-friendly text
+        pass
+
+
+def _canonical_json_bytes(obj: Any) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _sha256_hex(obj: Any) -> str:
+    return hashlib.sha256(_canonical_json_bytes(obj)).hexdigest()
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _plan_fingerprint(plan_obj: Dict[str, Any]) -> str:
+    tmp = dict(plan_obj)
+    tmp.pop("plan_fingerprint", None)
+    return _sha256_hex(tmp)
+
+
+def _raise_config_error(code: str, message: str, *, details: Dict[str, Any], remediation: str) -> None:
+    raise PPDSException(
+        PPDSProblem(
+            code=code,
+            category="config",
+            message=message,
+            details=details,
+            remediation=remediation,
+        ),
+        ExitCode.CONFIG_INVALID,
+    )
 
 # =============================================================================
 # Commands
@@ -155,20 +223,33 @@ def cmd_validate(args: argparse.Namespace) -> int:
     ok, errors = _validate_policy_features(policy, features)
 
     if ok:
-        if args.format == "json":
-            print(json.dumps({"ok": True}, indent=2))
+        if args.format in ("json", "jsonl"):
+            _print_payload({"ok": True}, args.format)
         else:
             print("OK: configs are valid")
-        return 0
+        return int(ExitCode.OK)
 
-    payload = {"ok": False, "errors": errors}
-    if args.format == "json":
-        print(json.dumps(payload, indent=2))
+    payload = {
+        "ok": False,
+        "errors": errors,
+        "error": {
+            "code": "PPDS_CONFIG_INVALID",
+            "category": "config",
+            "message": "Invalid configuration",
+            "details": {"count": len(errors)},
+            "remediation": "Fix the errors and re-run `ppds validate`.",
+        },
+        "exit_code": int(ExitCode.CONFIG_INVALID),
+    }
+
+    if args.format in ("json", "jsonl"):
+        _print_payload(payload, args.format)
     else:
         print("INVALID CONFIG:")
         for e in errors:
             print(f"- {e}")
-    return 2
+    return int(ExitCode.CONFIG_INVALID)
+
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -176,17 +257,43 @@ def cmd_plan(args: argparse.Namespace) -> int:
     features = _load_json(args.features)
     ok, errors = _validate_policy_features(policy, features)
     if not ok:
-        for e in errors:
-            print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+        if args.format in ("json", "jsonl"):
+            _print_payload(
+                {"ok": False, "errors": errors, "exit_code": int(ExitCode.CONFIG_INVALID)},
+                args.format,
+            )
+        else:
+            for e in errors:
+                print(f"ERROR: {e}", file=sys.stderr)
+        return int(ExitCode.CONFIG_INVALID)
 
     th = _to_thresholds(policy)
     feat = _to_feature_spec(features)
-    dec = decide(feat, th)
 
-    # Stable, audit-friendly output contract
-    out_obj: Dict[str, Any] = {
-        "schema_version": 1,
+    # deterministic hashes for audit
+    policy_hash = _sha256_hex(policy)
+    input_fingerprint = _sha256_hex(features)
+
+    try:
+        dec = decide(feat, th)
+    except Exception as e:
+        raise PPDSException(
+            PPDSProblem(
+                code="PPDS_PLANNER_RUNTIME_ERROR",
+                category="runtime",
+                message="Planner failed while computing a decision",
+                details={"error": repr(e), "feature_id": getattr(feat, "feature_id", None)},
+                remediation="Inspect inputs and planner logs; fix invalid fields and retry.",
+            ),
+            ExitCode.RUNTIME_ERROR,
+            cause=e,
+        )
+
+    plan_obj: Dict[str, Any] = {
+        "schema_version": "ppds.plan/0.1",
+        "created_at": _utc_now_iso(),
+        "policy_hash": policy_hash,
+        "input_fingerprint": input_fingerprint,
         "decision": {
             "boundary": getattr(dec.boundary, "value", str(dec.boundary)),
             "granularity": getattr(dec.granularity, "value", str(dec.granularity)),
@@ -196,29 +303,64 @@ def cmd_plan(args: argparse.Namespace) -> int:
         "planner_constraints_json": getattr(dec, "planner_constraints_json", None),
         "scorecard": asdict(dec.scorecard) if hasattr(dec, "scorecard") else None,
     }
+    plan_obj["plan_fingerprint"] = _plan_fingerprint(plan_obj)
 
-    _write_text(args.out, json.dumps(out_obj, indent=2, default=str))
-    print(f"Wrote plan: {args.out}")
-    return 0
+    _write_text(args.out, json.dumps(plan_obj, indent=2, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+
+    if args.format in ("json", "jsonl"):
+        _print_payload(
+            {"ok": True, "out": args.out, "plan_fingerprint": plan_obj["plan_fingerprint"]},
+            args.format,
+        )
+    else:
+        print(f"Wrote plan: {args.out}")
+
+    # orchestration-friendly: infeasible => policy rejected (non-crash)
+    if not plan_obj["decision"]["feasible"]:
+        return int(ExitCode.POLICY_REJECTED)
+    return int(ExitCode.OK)
 
 
 def cmd_emit_sql(args: argparse.Namespace) -> int:
     plan_obj = _load_json(args.plan)
 
-    # Minimal SQL emission (placeholder). Replace with your real emitter as it matures.
+    if "decision" not in plan_obj:
+        _raise_config_error(
+            "PPDS_PLAN_MISSING_DECISION",
+            "plan.json missing required key: decision",
+            details={"path": args.plan},
+            remediation="Regenerate plan.json using `ppds plan` with valid inputs.",
+        )
+
     dec = plan_obj.get("decision", {})
     constraints = plan_obj.get("planner_constraints_json", {})
 
+    header_meta = {
+        "ppds_schema_version": plan_obj.get("schema_version"),
+        "created_at": plan_obj.get("created_at"),
+        "policy_hash": plan_obj.get("policy_hash"),
+        "input_fingerprint": plan_obj.get("input_fingerprint"),
+        "plan_fingerprint": plan_obj.get("plan_fingerprint"),
+        "dialect": args.dialect,
+        "boundary": dec.get("boundary"),
+        "granularity": dec.get("granularity"),
+        "feasible": dec.get("feasible"),
+    }
+    header = "-- ppds:" + json.dumps(header_meta, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
     sql = (
-        f"-- PPDS SQL (dialect={args.dialect})\n"
-        f"-- boundary={dec.get('boundary')} granularity={dec.get('granularity')}\n"
-        f"-- constraints={constraints}\n\n"
+        f"{header}\n"
+        f"-- constraints={json.dumps(constraints, sort_keys=True, ensure_ascii=False)}\n\n"
         f"SELECT 1 AS ppds_placeholder;\n"
     )
 
     _write_text(args.out, sql)
-    print(f"Wrote SQL: {args.out}")
-    return 0
+
+    if args.format in ("json", "jsonl"):
+        _print_payload({"ok": True, "out": args.out}, args.format)
+    else:
+        print(f"Wrote SQL: {args.out}")
+    return int(ExitCode.OK)
 
 
 def cmd_demo(_: argparse.Namespace) -> int:
@@ -281,7 +423,7 @@ def cmd_demo(_: argparse.Namespace) -> int:
 # =============================================================================
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="ppds")
+    parser.add_argument("--format", default="text", choices=["text", "json", "jsonl"])
     sub = parser.add_subparsers(dest="cmd", required=False)
 
     # validate
@@ -316,8 +458,36 @@ def main() -> None:
         parser.print_help()
         raise SystemExit(2)
 
+try:
     rc = args.func(args)
     raise SystemExit(rc)
+except PPDSException as e:
+    payload = {"ok": False, "error": problem_to_dict(e.problem), "exit_code": int(e.exit_code)}
+    if getattr(args, "format", "text") in ("json", "jsonl"):
+        _print_payload(payload, args.format)
+    else:
+        print(f"ERROR[{e.problem.code}]: {e.problem.message}", file=sys.stderr)
+        if e.problem.remediation:
+            print(f"REMEDIATION: {e.problem.remediation}", file=sys.stderr)
+        print(f"DETAILS: {e.problem.details}", file=sys.stderr)
+    raise SystemExit(int(e.exit_code))
+except Exception as e:
+    payload = {
+        "ok": False,
+        "error": {
+            "code": "PPDS_UNHANDLED_EXCEPTION",
+            "category": "internal",
+            "message": "Unhandled exception",
+            "details": {"error": repr(e)},
+        },
+        "exit_code": int(ExitCode.INTERNAL_ERROR),
+    }
+    if getattr(args, "format", "text") in ("json", "jsonl"):
+        _print_payload(payload, args.format)
+    else:
+        print(f"ERROR: {repr(e)}", file=sys.stderr)
+    raise SystemExit(int(ExitCode.INTERNAL_ERROR))
+
 
 
 if __name__ == "__main__":

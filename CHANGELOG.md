@@ -52,3 +52,23 @@ Release notes prioritize: auditability, deterministic behavior, and integration 
 
 
 [0.1.1]:https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v.0.1.1
+
+
+## [0.1.2] - 2026-02-18
+
+### Added
+- Introduced deterministic `PPDSPlan` contract (`ppds.plan/0.1`)
+- Added canonical hashing for `input_fingerprint` and `plan_fingerprint`
+- Added `--format` support (`text`, `json`, `jsonl`) for CLI outputs
+
+### Changed
+- Refactored `ppds` CLI to be pipeline-ready and CI-stable
+- Standardized CLI subcommands: `validate`, `plan`, `emit-sql`, `demo`
+
+### Fixed
+- Fixed CLI import-time failures (`main` entrypoint issues)
+- Fixed plan fingerprint instability caused by timestamp metadata
+- Resolved runtime crashes in GitHub Actions test environment
+
+[0.1.2]:https://github.com/tina77fritz/privacy-preserving-data-systems/releases/tag/v.0.1.2
+

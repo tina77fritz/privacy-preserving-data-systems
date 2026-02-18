@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -11,8 +11,17 @@ from typing import Any, Dict, List, Optional
 PLAN_SCHEMA_VERSION = "ppds.plan/0.1"
 
 
+# =============================================================================
+# Canonicalization + hashing
+# =============================================================================
+
 def _canonical_json_bytes(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    """
+    Canonical JSON for stable hashing:
+    - sort_keys=True ensures deterministic key order
+    - separators remove whitespace differences
+    """
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
 
 
 def _sha256_hex_obj(obj: Any) -> str:
@@ -22,6 +31,31 @@ def _sha256_hex_obj(obj: Any) -> str:
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+def compute_input_fingerprint(input_obj: Dict[str, Any]) -> str:
+    """
+    Deterministic fingerprint of the input object (order-insensitive).
+    """
+    return _sha256_hex_obj(input_obj)
+
+
+def compute_plan_fingerprint(plan_obj: Dict[str, Any]) -> str:
+    """
+    Deterministic fingerprint of the plan contract.
+
+    IMPORTANT for tests/CI:
+    - Excludes created_at because it is inherently non-deterministic.
+    - Excludes plan_fingerprint itself to avoid recursion.
+    """
+    tmp = dict(plan_obj)
+    tmp.pop("plan_fingerprint", None)
+    tmp.pop("created_at", None)
+    return _sha256_hex_obj(tmp)
+
+
+# =============================================================================
+# Contract types
+# =============================================================================
 
 @dataclass(frozen=True)
 class RejectionReason:
@@ -35,7 +69,6 @@ class RejectionReason:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         return {k: v for k, v in d.items() if v is not None}
-
 
 
 @dataclass
@@ -77,11 +110,13 @@ class PPDSPlan:
             schema_version=schema_version,
             created_at=created_at or utc_now_iso(),
             policy_hash=str(policy_hash),
-            input_fingerprint=_sha256_hex_obj(input_obj),
+            input_fingerprint=compute_input_fingerprint(input_obj),
             plan_fingerprint="",
-            status=status,
+            status=str(status),
             decisions=decisions,
             rejection_reasons=rejection_reasons or [],
         )
-        plan.plan_fingerprint = plan.to_dict()["plan_fingerprint"]
+
+        # Set a deterministic fingerprint (excludes created_at by design).
+        plan.plan_fingerprint = compute_plan_fingerprint(plan.to_dict())
         return plan

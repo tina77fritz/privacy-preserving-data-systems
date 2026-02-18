@@ -422,7 +422,9 @@ def cmd_demo(_: argparse.Namespace) -> int:
 # Entrypoint
 # =============================================================================
 
+
 def main() -> None:
+    parser = argparse.ArgumentParser(prog="ppds")
     parser.add_argument("--format", default="text", choices=["text", "json", "jsonl"])
     sub = parser.add_subparsers(dest="cmd", required=False)
 
@@ -430,7 +432,7 @@ def main() -> None:
     p_val = sub.add_parser("validate", help="Validate policy/features configs (fail-closed)")
     p_val.add_argument("--policy", required=True, help="Path to policy JSON")
     p_val.add_argument("--features", required=True, help="Path to feature spec JSON")
-    p_val.add_argument("--format", default="text", choices=["text", "json"])
+    # IMPORTANT: remove subcommand-level --format to avoid conflict with global --format
     p_val.set_defaults(func=cmd_validate)
 
     # plan
@@ -453,41 +455,39 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # If user runs `ppds` with no args, show help and exit non-zero (friendly for CI)
     if not getattr(args, "cmd", None):
         parser.print_help()
         raise SystemExit(2)
 
-try:
-    rc = args.func(args)
-    raise SystemExit(rc)
-except PPDSException as e:
-    payload = {"ok": False, "error": problem_to_dict(e.problem), "exit_code": int(e.exit_code)}
-    if getattr(args, "format", "text") in ("json", "jsonl"):
-        _print_payload(payload, args.format)
-    else:
-        print(f"ERROR[{e.problem.code}]: {e.problem.message}", file=sys.stderr)
-        if e.problem.remediation:
-            print(f"REMEDIATION: {e.problem.remediation}", file=sys.stderr)
-        print(f"DETAILS: {e.problem.details}", file=sys.stderr)
-    raise SystemExit(int(e.exit_code))
-except Exception as e:
-    payload = {
-        "ok": False,
-        "error": {
-            "code": "PPDS_UNHANDLED_EXCEPTION",
-            "category": "internal",
-            "message": "Unhandled exception",
-            "details": {"error": repr(e)},
-        },
-        "exit_code": int(ExitCode.INTERNAL_ERROR),
-    }
-    if getattr(args, "format", "text") in ("json", "jsonl"):
-        _print_payload(payload, args.format)
-    else:
-        print(f"ERROR: {repr(e)}", file=sys.stderr)
-    raise SystemExit(int(ExitCode.INTERNAL_ERROR))
-
+    try:
+        rc = args.func(args)
+        raise SystemExit(rc)
+    except PPDSException as e:
+        payload = {"ok": False, "error": problem_to_dict(e.problem), "exit_code": int(e.exit_code)}
+        if getattr(args, "format", "text") in ("json", "jsonl"):
+            _print_payload(payload, args.format)
+        else:
+            print(f"ERROR[{e.problem.code}]: {e.problem.message}", file=sys.stderr)
+            if getattr(e.problem, "remediation", None):
+                print(f"REMEDIATION: {e.problem.remediation}", file=sys.stderr)
+            print(f"DETAILS: {e.problem.details}", file=sys.stderr)
+        raise SystemExit(int(e.exit_code))
+    except Exception as e:
+        payload = {
+            "ok": False,
+            "error": {
+                "code": "PPDS_UNHANDLED_EXCEPTION",
+                "category": "internal",
+                "message": "Unhandled exception",
+                "details": {"error": repr(e)},
+            },
+            "exit_code": int(ExitCode.INTERNAL_ERROR),
+        }
+        if getattr(args, "format", "text") in ("json", "jsonl"):
+            _print_payload(payload, args.format)
+        else:
+            print(f"ERROR: {repr(e)}", file=sys.stderr)
+        raise SystemExit(int(ExitCode.INTERNAL_ERROR))
 
 
 if __name__ == "__main__":

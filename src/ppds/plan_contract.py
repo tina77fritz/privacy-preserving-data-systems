@@ -56,4 +56,4 @@ class PPDSPlan:
     policy_hash: str
     input_fingerprint: str
     plan_fingerprint: str
-    status:
+    status: str # "accepted" | "rejected"

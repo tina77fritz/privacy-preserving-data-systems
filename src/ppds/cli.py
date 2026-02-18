@@ -8,9 +8,10 @@ import sys
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .budget import BudgetLedger, SpendEvent
+from .errors import ExitCode, PPDSException, PPDSProblem
 from .planner import decide, plan_counterfactuals
 from .types import (
     Boundary,
@@ -21,14 +22,9 @@ from .types import (
     PolicyThresholds,
 )
 
-# IMPORTANT:
-# - Do NOT assume errors.py exports problem_to_dict (it may not).
-# - Only rely on ExitCode / PPDSException / PPDSProblem existing.
-from .errors import ExitCode, PPDSException, PPDSProblem
-
 
 # =============================================================================
-# Helpers: JSON IO + formatting + hashing
+# Helpers
 # =============================================================================
 
 def _canonical_json_bytes(obj: Any) -> bytes:
@@ -134,10 +130,6 @@ def _require_keys(obj: Dict[str, Any], keys: List[str], where: str) -> List[str]
 
 
 def _validate_policy_features(policy: Dict[str, Any], features: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """
-    Minimal fail-closed validation. Keep this conservative and expand later.
-    Must match what downstream constructors expect.
-    """
     errors: List[str] = []
     errors += _require_keys(policy, ["thresholds"], "policy")
     errors += _require_keys(features, ["feature_id", "fields"], "features")
@@ -153,7 +145,7 @@ def _validate_policy_features(policy: Dict[str, Any], features: Dict[str, Any]) 
 def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
     th = policy["thresholds"]
 
-    # defaults (from demo)
+    # defaults
     tau_boundary = {
         Boundary.LOCAL: 0.90,
         Boundary.SHUFFLE: 0.70,
@@ -165,7 +157,6 @@ def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
         Granularity.AGGREGATE: 0.75,
     }
 
-    # override from config (optional)
     for k, v in (th.get("tau_boundary", {}) or {}).items():
         b = Boundary[k] if isinstance(k, str) and k in Boundary.__members__ else Boundary(k)
         tau_boundary[b] = float(v)
@@ -182,20 +173,8 @@ def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
 
 
 def _to_feature_spec(features: Dict[str, Any]) -> FeatureSpec:
-    """
-    Build FeatureSpec from JSON.
-
-    Expected minimal schema:
-    {
-      "feature_id": "...",
-      "fields": [{"name": "...", "dtype": "...", "is_sensitive": true, "is_identifier": false}, ...],
-      "bucketizations": {"age": 80},
-      "join_keys": [{"name": "...", "stability": 0.95, "ndv_hint": 5000000}],
-      ...
-    }
-    """
     fields: List[FieldSpec] = []
-    for f in features.get("fields", []):
+    for f in features.get("fields", []) or []:
         if not isinstance(f, dict):
             raise ValueError("features.fields items must be objects")
         fields.append(
@@ -261,6 +240,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     policy = _load_json(args.policy)
     features = _load_json(args.features)
     ok, errors = _validate_policy_features(policy, features)
+
     if not ok:
         if args.format in ("json", "jsonl"):
             _print_payload({"ok": False, "errors": errors}, args.format)
@@ -281,15 +261,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 category="runtime",
                 message="Planner failed while computing a decision",
                 details={"error": repr(e), "feature_id": getattr(feat, "feature_id", None)},
-                remediation="Inspect the input feature spec and planner logs; fix invalid fields and retry.",
+                remediation="Inspect inputs and planner logs; fix invalid fields and retry.",
             ),
             ExitCode.RUNTIME_ERROR,
             cause=e,
         )
 
-    # Keep schema_version as int for backward compatibility with existing users/tests.
     plan_obj: Dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 1,  # keep int for backward compatibility
         "created_at": _utc_now_iso(),
         "policy_hash": _sha256_hex(policy),
         "input_fingerprint": _sha256_hex(features),
@@ -311,7 +290,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     else:
         print(f"Wrote plan: {args.out}")
 
-    # Return 0 for end-to-end demo stability; decision.feasible is encoded in plan.json.
+    # Keep exit code 0 for integration demo stability
     return 0
 
 
@@ -343,9 +322,11 @@ def cmd_emit_sql(args: argparse.Namespace) -> int:
     header = "-- ppds:" + json.dumps(header_meta, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     sql = (
-        f"{header}\n"
-        f"-- constraints={json.dumps(constraints, sort_keys=True, ensure_ascii=False)}\n\n"
-        f"SELECT 1 AS ppds_placeholder;\n"
+        header
+        + "\n"
+        + "-- constraints="
+        + json.dumps(constraints, sort_keys=True, ensure_ascii=False)
+        + "\n\nSELECT 1 AS ppds_placeholder;\n"
     )
 
     _write_text(args.out, sql)
@@ -354,13 +335,11 @@ def cmd_emit_sql(args: argparse.Namespace) -> int:
         _print_payload({"ok": True, "out": str(args.out)}, args.format)
     else:
         print(f"Wrote SQL: {args.out}")
+
     return 0
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
-    """
-    Preserve existing demo behavior as `ppds demo`.
-    """
     th = PolicyThresholds(
         tau_boundary={Boundary.LOCAL: 0.90, Boundary.SHUFFLE: 0.70, Boundary.CENTRAL: 0.55},
         tau_granularity={Granularity.ITEM: 0.45, Granularity.CLUSTER: 0.60, Granularity.AGGREGATE: 0.75},
@@ -396,19 +375,23 @@ def cmd_demo(args: argparse.Namespace) -> int:
     if args.format in ("json", "jsonl"):
         _print_payload(out, args.format)
     else:
-        print("\n== Decision ==")
         print(json.dumps(out, indent=2, default=str))
 
-        print("\n== Counterfactuals (target ITEM) ==")
         cfs = plan_counterfactuals(f, th, target_g=Granularity.ITEM)
         for x in cfs[:5]:
             sc = x["scorecard"]
             print(
-                f"- {x['edit']}  feasible={x['feasible_at_target']}  risk={sc.risk:.3f}  "
-                f"(L={sc.L:.2f},U={sc.U:.2f},I={sc.I:.2f},R={sc.R:.2f})"
+                "- {} feasible={} risk={:.3f} (L={:.2f},U={:.2f},I={:.2f},R={:.2f})".format(
+                    x["edit"],
+                    x["feasible_at_target"],
+                    sc.risk,
+                    sc.L,
+                    sc.U,
+                    sc.I,
+                    sc.R,
+                )
             )
 
-        print("\n== Budget Ledger demo (30-day cap) ==")
         ledger = BudgetLedger()
         cap = 1.0
         today = date(2026, 1, 30)
@@ -428,16 +411,50 @@ def cmd_demo(args: argparse.Namespace) -> int:
             )
         )
 
-def main(argv: list[str] | None = None) -> int:
-    """
-    Entry point used by the console script: `from ppds.cli import main`.
-    Must remain importable.
-    """
-    return _main(argv)
+    return 0
 
 
-def _main(argv: list[str] | None = None) -> int:
-    # If you already have a main implementation, move it here and keep this name.
+# =============================================================================
+# Parser + entrypoint
+# =============================================================================
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="ppds")
+    sub = parser.add_subparsers(dest="cmd", required=False)
+
+    fmt_choices = ["text", "json", "jsonl"]
+
+    p_val = sub.add_parser("validate", help="Validate policy/features configs")
+    p_val.add_argument("--policy", required=True)
+    p_val.add_argument("--features", required=True)
+    p_val.add_argument("--format", default="text", choices=fmt_choices)
+    p_val.set_defaults(func=cmd_validate)
+
+    p_plan = sub.add_parser("plan", help="Generate an auditable plan.json")
+    p_plan.add_argument("--policy", required=True)
+    p_plan.add_argument("--features", required=True)
+    p_plan.add_argument("--out", required=True)
+    p_plan.add_argument("--format", default="text", choices=fmt_choices)
+    p_plan.set_defaults(func=cmd_plan)
+
+    p_sql = sub.add_parser("emit-sql", help="Emit SQL from plan.json")
+    p_sql.add_argument("--plan", required=True)
+    p_sql.add_argument("--dialect", default="spark")
+    p_sql.add_argument("--out", required=True)
+    p_sql.add_argument("--format", default="text", choices=fmt_choices)
+    p_sql.set_defaults(func=cmd_emit_sql)
+
+    p_demo = sub.add_parser("demo", help="Run built-in demo")
+    p_demo.add_argument("--format", default="text", choices=fmt_choices)
+    p_demo.set_defaults(func=cmd_demo)
+
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Console-script entrypoint: `from ppds.cli import main`
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -460,4 +477,23 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"DETAILS: {err.get('details', {})}", file=sys.stderr)
         return int(e.exit_code)
     except Exception as e:
+        payload = {
+            "ok": False,
+            "error": {
+                "code": "PPDS_UNHANDLED_EXCEPTION",
+                "category": "internal",
+                "message": "Unhandled exception",
+                "details": {"error": repr(e)},
+            },
+            "exit_code": int(ExitCode.INTERNAL_ERROR),
+        }
+        fmt = getattr(args, "format", "text")
+        if fmt in ("json", "jsonl"):
+            _print_payload(payload, fmt)
+        else:
+            print(f"ERROR: {repr(e)}", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
 
+
+if __name__ == "__main__":
+    raise SystemExit(main())

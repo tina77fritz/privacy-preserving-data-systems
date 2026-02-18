@@ -32,3 +32,12 @@ class PPDSException(Exception):
         cause: Optional[BaseException] = None,
     ) -> None:
         super().__init__(problem.message)
+
+from dataclasses import asdict
+from typing import Any, Dict
+
+def problem_to_dict(p: "PPDSProblem") -> Dict[str, Any]:
+    d = asdict(p)
+    if d.get("remediation") is None:
+        d.pop("remediation", None)
+    return d

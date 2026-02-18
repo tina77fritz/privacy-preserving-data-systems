@@ -1,3 +1,4 @@
+# src/ppds/plan_contract.py
 from __future__ import annotations
 
 import hashlib
@@ -11,11 +12,10 @@ PLAN_SCHEMA_VERSION = "ppds.plan/0.1"
 
 
 def _canonical_json_bytes(obj: Any) -> bytes:
-    # stable bytes for hashing: sorted keys + no whitespace variance
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _sha256_hex(obj: Any) -> str:
+def _sha256_hex_obj(obj: Any) -> str:
     return hashlib.sha256(_canonical_json_bytes(obj)).hexdigest()
 
 
@@ -38,10 +38,9 @@ class RejectionReason:
 
 
 def compute_plan_fingerprint(plan_obj: Dict[str, Any]) -> str:
-    # exclude the fingerprint field itself
     tmp = dict(plan_obj)
     tmp.pop("plan_fingerprint", None)
-    return _sha256_hex(tmp)
+    return _sha256_hex_obj(tmp)
 
 
 @dataclass
@@ -51,7 +50,7 @@ class PPDSPlan:
     policy_hash: str
     input_fingerprint: str
     plan_fingerprint: str
-    status: str  # "accepted" | "rejected"
+    status: str
     decisions: Dict[str, Any]
     rejection_reasons: List[RejectionReason]
 
@@ -71,23 +70,23 @@ class PPDSPlan:
     @staticmethod
     def build(
         *,
-        policy_obj: Dict[str, Any],
+        policy_hash: str,
         input_obj: Dict[str, Any],
         status: str,
         decisions: Dict[str, Any],
         rejection_reasons: Optional[List[RejectionReason]] = None,
         created_at: Optional[str] = None,
+        schema_version: str = PLAN_SCHEMA_VERSION,
     ) -> "PPDSPlan":
         plan = PPDSPlan(
-            schema_version=PLAN_SCHEMA_VERSION,
+            schema_version=schema_version,
             created_at=created_at or utc_now_iso(),
-            policy_hash=_sha256_hex(policy_obj),
-            input_fingerprint=_sha256_hex(input_obj),
+            policy_hash=str(policy_hash),
+            input_fingerprint=_sha256_hex_obj(input_obj),
             plan_fingerprint="",
             status=status,
             decisions=decisions,
             rejection_reasons=rejection_reasons or [],
         )
-        # set deterministic fingerprint
         plan.plan_fingerprint = plan.to_dict()["plan_fingerprint"]
         return plan

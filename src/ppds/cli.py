@@ -22,13 +22,19 @@ from .types import (
     PolicyThresholds,
 )
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
 
+
 def _canonical_json_bytes(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
 
 
 def _sha256_hex(obj: Any) -> str:
@@ -68,7 +74,7 @@ def _print_payload(payload: Dict[str, Any], fmt: str) -> None:
     elif fmt == "jsonl":
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
     else:
-        # "text": caller prints human-friendly output
+        # text mode
         pass
 
 
@@ -145,7 +151,6 @@ def _validate_policy_features(policy: Dict[str, Any], features: Dict[str, Any]) 
 def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
     th = policy["thresholds"]
 
-    # defaults
     tau_boundary = {
         Boundary.LOCAL: 0.90,
         Boundary.SHUFFLE: 0.70,
@@ -174,7 +179,7 @@ def _to_thresholds(policy: Dict[str, Any]) -> PolicyThresholds:
 
 def _to_feature_spec(features: Dict[str, Any]) -> FeatureSpec:
     fields: List[FieldSpec] = []
-    for f in features.get("fields", []) or []:
+    for f in (features.get("fields", []) or []):
         if not isinstance(f, dict):
             raise ValueError("features.fields items must be objects")
         fields.append(
@@ -187,7 +192,7 @@ def _to_feature_spec(features: Dict[str, Any]) -> FeatureSpec:
         )
 
     join_keys: List[JoinKeySpec] = []
-    for jk in features.get("join_keys", []) or []:
+    for jk in (features.get("join_keys", []) or []):
         if not isinstance(jk, dict):
             raise ValueError("features.join_keys items must be objects")
         join_keys.append(
@@ -213,6 +218,7 @@ def _to_feature_spec(features: Dict[str, Any]) -> FeatureSpec:
 # =============================================================================
 # Commands
 # =============================================================================
+
 
 def cmd_validate(args: argparse.Namespace) -> int:
     policy = _load_json(args.policy)
@@ -268,7 +274,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         )
 
     plan_obj: Dict[str, Any] = {
-        "schema_version": 1,  # keep int for backward compatibility
+        "schema_version": 1,
         "created_at": _utc_now_iso(),
         "policy_hash": _sha256_hex(policy),
         "input_fingerprint": _sha256_hex(features),
@@ -286,11 +292,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
     _write_text(args.out, json.dumps(plan_obj, indent=2, ensure_ascii=False, sort_keys=True, default=str) + "\n")
 
     if args.format in ("json", "jsonl"):
-        _print_payload({"ok": True, "out": str(args.out), "plan_fingerprint": plan_obj["plan_fingerprint"]}, args.format)
+        _print_payload(
+            {"ok": True, "out": str(args.out), "plan_fingerprint": plan_obj["plan_fingerprint"]},
+            args.format,
+        )
     else:
         print(f"Wrote plan: {args.out}")
 
-    # Keep exit code 0 for integration demo stability
+    # Integration tests expect success codes; feasibility is encoded in plan.json.
     return 0
 
 
@@ -328,7 +337,6 @@ def cmd_emit_sql(args: argparse.Namespace) -> int:
         + json.dumps(constraints, sort_keys=True, ensure_ascii=False)
         + "\n\nSELECT 1 AS ppds_placeholder;\n"
     )
-
     _write_text(args.out, sql)
 
     if args.format in ("json", "jsonl"):
@@ -374,49 +382,50 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
     if args.format in ("json", "jsonl"):
         _print_payload(out, args.format)
-    else:
-        print(json.dumps(out, indent=2, default=str))
+        return 0
 
-        cfs = plan_counterfactuals(f, th, target_g=Granularity.ITEM)
-        for x in cfs[:5]:
-            sc = x["scorecard"]
-            print(
-                "- {} feasible={} risk={:.3f} (L={:.2f},U={:.2f},I={:.2f},R={:.2f})".format(
-                    x["edit"],
-                    x["feasible_at_target"],
-                    sc.risk,
-                    sc.L,
-                    sc.U,
-                    sc.I,
-                    sc.R,
-                )
-            )
+    print(json.dumps(out, indent=2, default=str))
 
-        ledger = BudgetLedger()
-        cap = 1.0
-        today = date(2026, 1, 30)
-        for i in range(9):
-            ledger.commit(SpendEvent(f.feature_id, today.replace(day=today.day - i), epsilon=0.1))
-        eps30, _ = ledger.window_spend(f.feature_id, 30, today)
+    cfs = plan_counterfactuals(f, th, target_g=Granularity.ITEM)
+    for x in cfs[:5]:
+        sc = x["scorecard"]
         print(
-            "spent_eps_30d={:.2f} cap={:.2f} can_spend_next_0.1={}".format(
-                eps30,
-                cap,
-                ledger.can_spend(f.feature_id, 30, today, cap, 0.0, 0.1),
-            )
-        )
-        print(
-            "adaptive_eps_for_next_21_releases={:.4f}".format(
-                ledger.adaptive_eps(f.feature_id, 30, today, cap, planned_releases_left=21)
+            "- {} feasible={} risk={:.3f} (L={:.2f},U={:.2f},I={:.2f},R={:.2f})".format(
+                x["edit"],
+                x["feasible_at_target"],
+                sc.risk,
+                sc.L,
+                sc.U,
+                sc.I,
+                sc.R,
             )
         )
 
+    ledger = BudgetLedger()
+    cap = 1.0
+    today = date(2026, 1, 30)
+    for i in range(9):
+        ledger.commit(SpendEvent(f.feature_id, today.replace(day=today.day - i), epsilon=0.1))
+    eps30, _ = ledger.window_spend(f.feature_id, 30, today)
+    print(
+        "spent_eps_30d={:.2f} cap={:.2f} can_spend_next_0.1={}".format(
+            eps30,
+            cap,
+            ledger.can_spend(f.feature_id, 30, today, cap, 0.0, 0.1),
+        )
+    )
+    print(
+        "adaptive_eps_for_next_21_releases={:.4f}".format(
+            ledger.adaptive_eps(f.feature_id, 30, today, cap, planned_releases_left=21)
+        )
+    )
     return 0
 
 
 # =============================================================================
 # Parser + entrypoint
 # =============================================================================
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ppds")
@@ -427,6 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_val = sub.add_parser("validate", help="Validate policy/features configs")
     p_val.add_argument("--policy", required=True)
     p_val.add_argument("--features", required=True)
+    # define per-subcommand so tests can pass it after command name
     p_val.add_argument("--format", default="text", choices=fmt_choices)
     p_val.set_defaults(func=cmd_validate)
 
@@ -453,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """
-    Console-script entrypoint: `from ppds.cli import main`
+    Console-script entrypoint: the installed `ppds` script imports this symbol.
     """
     parser = build_parser()
     args = parser.parse_args(argv)

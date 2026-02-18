@@ -37,11 +37,6 @@ class RejectionReason:
         return {k: v for k, v in d.items() if v is not None}
 
 
-def compute_plan_fingerprint(plan_obj: Dict[str, Any]) -> str:
-    tmp = dict(plan_obj)
-    tmp.pop("plan_fingerprint", None)
-    return _sha256_hex_obj(tmp)
-
 
 @dataclass
 class PPDSPlan:

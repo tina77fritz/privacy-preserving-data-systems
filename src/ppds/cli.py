@@ -427,3 +427,37 @@ def cmd_demo(args: argparse.Namespace) -> int:
                 ledger.adaptive_eps(f.feature_id, 30, today, cap, planned_releases_left=21)
             )
         )
+
+def main(argv: list[str] | None = None) -> int:
+    """
+    Entry point used by the console script: `from ppds.cli import main`.
+    Must remain importable.
+    """
+    return _main(argv)
+
+
+def _main(argv: list[str] | None = None) -> int:
+    # If you already have a main implementation, move it here and keep this name.
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not getattr(args, "cmd", None):
+        parser.print_help()
+        return 2
+
+    try:
+        return int(args.func(args))
+    except PPDSException as e:
+        payload = {"ok": False, "error": _problem_to_dict(e.problem), "exit_code": int(e.exit_code)}
+        fmt = getattr(args, "format", "text")
+        if fmt in ("json", "jsonl"):
+            _print_payload(payload, fmt)
+        else:
+            err = payload["error"]
+            print(f"ERROR[{err.get('code','PPDS_ERROR')}]: {err.get('message')}", file=sys.stderr)
+            if err.get("remediation"):
+                print(f"REMEDIATION: {err['remediation']}", file=sys.stderr)
+            print(f"DETAILS: {err.get('details', {})}", file=sys.stderr)
+        return int(e.exit_code)
+    except Exception as e:
+

@@ -416,5 +416,14 @@ def cmd_demo(args: argparse.Namespace) -> int:
             ledger.commit(SpendEvent(f.feature_id, today.replace(day=today.day - i), epsilon=0.1))
         eps30, _ = ledger.window_spend(f.feature_id, 30, today)
         print(
-            f"spent_eps_30d={eps30:.2f} cap={cap:.2f} "
-            f"can_spend_next_0.1={ledger_
+            "spent_eps_30d={:.2f} cap={:.2f} can_spend_next_0.1={}".format(
+                eps30,
+                cap,
+                ledger.can_spend(f.feature_id, 30, today, cap, 0.0, 0.1),
+            )
+        )
+        print(
+            "adaptive_eps_for_next_21_releases={:.4f}".format(
+                ledger.adaptive_eps(f.feature_id, 30, today, cap, planned_releases_left=21)
+            )
+        )

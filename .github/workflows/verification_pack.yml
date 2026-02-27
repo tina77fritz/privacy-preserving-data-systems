@@ -1,0 +1,153 @@
+name: ppds-verification-pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      policy:
+        description: "Policy file path"
+        required: true
+        default: "examples/policies/policy_v1.json"
+      features:
+        description: "Features file path"
+        required: true
+        default: "examples/features/features.json"
+      boundary:
+        description: "Boundary name (if your CLI needs it)"
+        required: false
+        default: "ads_export"
+
+jobs:
+  build-pack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Record environment
+        run: |
+          python --version > python_version.txt
+          python -m pip freeze > pip_freeze.txt
+          git rev-parse HEAD > git_commit.txt
+
+      # === RUN 1: Generate plan + SQL ===
+      - name: Generate plan.json
+        run: |
+          ppds plan \
+            --policy "${{ inputs.policy }}" \
+            --features "${{ inputs.features }}" \
+            --out plan.json
+
+      - name: Emit enforcement SQL
+        run: |
+          ppds emit-sql \
+            --plan plan.json \
+            --out query.sql
+
+      # === Optional: validate step (only if your CLI supports it) ===
+      - name: Validate
+        run: |
+          ppds validate \
+            --plan plan.json \
+            --sql query.sql \
+            --out validate_result.json
+
+      # === Derive hashes/fingerprints/audit summary files ===
+      - name: Create verification files
+        run: |
+          python - << 'PY'
+          import json, hashlib, datetime
+          from pathlib import Path
+
+          def sha256_file(p):
+            h=hashlib.sha256()
+            with open(p,'rb') as f:
+              for chunk in iter(lambda:f.read(8192), b''):
+                h.update(chunk)
+            return h.hexdigest()
+
+          plan = json.loads(Path("plan.json").read_text())
+          plan_fp = plan.get("plan_fingerprint","")
+          policy_hash = plan.get("policy_hash","")
+          input_fp = plan.get("input_fingerprint","")
+          sql_sha = sha256_file("query.sql")
+
+          Path("plan_fingerprint.txt").write_text(plan_fp + "\n")
+          Path("query_sql_sha256.txt").write_text(sql_sha + "\n")
+
+          # audit_report.md (human readable)
+          now = datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
+          keys = sorted(list(plan.keys()))
+          decision = plan.get("decision", {})
+          scorecard = plan.get("scorecard", {})
+
+          audit = []
+          audit.append("# PPDS Plan Audit Report (CI Replay)")
+          audit.append(f"- Generated at (UTC): {now}")
+          audit.append(f"- Plan SHA256: {sha256_file('plan.json')}")
+          audit.append(f"- SQL SHA256: {sql_sha}")
+          audit.append("")
+          audit.append("## Fingerprint used")
+          audit.append(f"- plan_fingerprint: `{plan_fp}`")
+          audit.append(f"- policy_hash: `{policy_hash}`")
+          audit.append(f"- input_fingerprint: `{input_fp}`")
+          audit.append("")
+          audit.append("## Top-level keys present")
+          for k in keys:
+            audit.append(f"- {k}")
+          audit.append("")
+          audit.append("## decision (summary)")
+          for k in ["boundary","feasible","granularity","reason"]:
+            if k in decision:
+              audit.append(f"- {k}: {decision[k]}")
+          audit.append("")
+          audit.append("## scorecard (summary)")
+          if isinstance(scorecard, dict):
+            for k in ["risk","L","U","I","R","policy_penalty"]:
+              if k in scorecard:
+                audit.append(f"- {k}: {scorecard[k]}")
+          Path("audit_report.md").write_text("\n".join(audit) + "\n")
+
+          # verification_summary.md
+          summ = []
+          summ.append("# Verification Summary")
+          summ.append("")
+          summ.append(f"- policy: `{Path('${{ inputs.policy }}').as_posix()}`")
+          summ.append(f"- features: `{Path('${{ inputs.features }}').as_posix()}`")
+          summ.append(f"- plan_fingerprint: `{plan_fp}`")
+          summ.append(f"- policy_hash: `{policy_hash}`")
+          summ.append(f"- input_fingerprint: `{input_fp}`")
+          summ.append(f"- query_sql_sha256: `{sql_sha}`")
+          summ.append("")
+          summ.append("## Files included")
+          for p in ["plan.json","query.sql","validate_result.json","audit_report.md","verification_summary.md",
+                    "plan_fingerprint.txt","query_sql_sha256.txt","git_commit.txt","pip_freeze.txt","python_version.txt"]:
+            if Path(p).exists():
+              summ.append(f"- {p}")
+          Path("verification_summary.md").write_text("\n".join(summ) + "\n")
+          PY
+
+      - name: Package artifacts
+        run: |
+          mkdir -p ppds-verification-pack
+          cp -f audit_report.md verification_summary.md plan.json query.sql plan_fingerprint.txt query_sql_sha256.txt \
+                git_commit.txt pip_freeze.txt python_version.txt ppds-verification-pack/
+          if [ -f validate_result.json ]; then cp -f validate_result.json ppds-verification-pack/; fi
+          (cd ppds-verification-pack && ls -lah)
+          zip -r ppds-verification-pack.zip ppds-verification-pack
+
+      - name: Upload pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppds-verification-pack
+          path: |
+            ppds-verification-pack.zip
+            ppds-verification-pack/**

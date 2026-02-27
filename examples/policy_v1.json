@@ -1,0 +1,20 @@
+{
+  "policy_version": "v1.0",
+
+  "k_min": 20,
+
+  "alpha_L": 0.4,
+  "alpha_U": 0.3,
+  "alpha_I": 0.2,
+  "alpha_R": 0.1,
+
+  "tau_boundary": {
+    "ads_export": 0.75,
+    "analytics_internal": 0.85
+  },
+
+  "tau_granularity": {
+    "zip3": 0.70,
+    "state": 0.85
+  }
+}

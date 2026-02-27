@@ -1,0 +1,31 @@
+{
+  "features": [
+    {
+      "feature_id": "f_zip3_health",
+      "n_users": 12000,
+      "n_records": 48000,
+      "distinct_values": 350,
+      "granularity": "zip3",
+      "sensitivity_tags": ["health"],
+      "lineage_tags": []
+    },
+    {
+      "feature_id": "f_state_purchase",
+      "n_users": 50000,
+      "n_records": 150000,
+      "distinct_values": 120,
+      "granularity": "state",
+      "sensitivity_tags": [],
+      "lineage_tags": []
+    },
+    {
+      "feature_id": "f_zip3_precise_loc",
+      "n_users": 8000,
+      "n_records": 40000,
+      "distinct_values": 900,
+      "granularity": "zip3",
+      "sensitivity_tags": ["precise_location"],
+      "lineage_tags": ["joined_external"]
+    }
+  ]
+}

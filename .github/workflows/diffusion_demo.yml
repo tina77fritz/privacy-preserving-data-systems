@@ -1,0 +1,63 @@
+name: diffusion-demo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run policy v1
+        run: |
+          ppds plan --policy examples/policies/policy_v1.json --features examples/features/features.json --out plan_v1.json
+          ppds emit-sql --plan plan_v1.json --out query_v1.sql
+
+      - name: Run policy v2 (strict)
+        run: |
+          ppds plan --policy examples/policies/policy_v2_strict.json --features examples/features/features.json --out plan_v2.json
+          ppds emit-sql --plan plan_v2.json --out query_v2.sql
+
+      - name: Diff key outputs
+        run: |
+          python - << 'PY'
+          import json, difflib
+          def load(p): 
+            with open(p) as f: return json.load(f)
+          a,b = load("plan_v1.json"), load("plan_v2.json")
+          keys = ["policy_hash","input_fingerprint","plan_fingerprint","decision","scorecard"]
+          def pick(x):
+            out={}
+            for k in keys:
+              if k in x: out[k]=x[k]
+            return out
+          pa,pb = pick(a), pick(b)
+          ta=json.dumps(pa,indent=2,sort_keys=True).splitlines(True)
+          tb=json.dumps(pb,indent=2,sort_keys=True).splitlines(True)
+          d="".join(difflib.unified_diff(ta,tb,fromfile="plan_v1(selected)",tofile="plan_v2(selected)"))
+          open("plan_diff.txt","w").write(d or "NO_DIFF\n")
+          PY
+          diff -u query_v1.sql query_v2.sql > sql_diff.txt || true
+          ls -lah
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: diffusion-demo-artifacts
+          path: |
+            plan_v1.json
+            plan_v2.json
+            query_v1.sql
+            query_v2.sql
+            plan_diff.txt
+            sql_diff.txt

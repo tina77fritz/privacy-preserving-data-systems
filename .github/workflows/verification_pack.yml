@@ -6,7 +6,7 @@ on:
       policy:
         description: "Policy file path"
         required: true
-        default: "examples/policies/policy_v1.json"
+        default: "examples/policies/policy_v2.json"
       features:
         description: "Features file path"
         required: true

@@ -1,7 +1,8 @@
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class Boundary(str, Enum):
@@ -68,6 +69,28 @@ class PolicyThresholds:
     alpha_U: float = 0.35
     alpha_I: float = 0.25
     alpha_R: float = 0.10
+
+    def __post_init__(self) -> None:
+        # Validate individual weights are non-negative
+        for name, value in (
+            ("alpha_L", self.alpha_L),
+            ("alpha_U", self.alpha_U),
+            ("alpha_I", self.alpha_I),
+            ("alpha_R", self.alpha_R),
+        ):
+            if value < 0.0:
+                raise ValueError(f"{name} must be non-negative, got {value}")
+
+        # Validate weights sum to 1.0
+        total = self.alpha_L + self.alpha_U + self.alpha_I + self.alpha_R
+        if not math.isclose(total, 1.0, rel_tol=1e-9, abs_tol=1e-9):
+            raise ValueError(
+                f"LPS weights (alpha_L + alpha_U + alpha_I + alpha_R) must sum to 1.0, "
+                f"got {total:.10f}"
+            )
+
+        if self.k_min < 1:
+            raise ValueError(f"k_min must be >= 1, got {self.k_min}")
 
 
 @dataclass(frozen=True)

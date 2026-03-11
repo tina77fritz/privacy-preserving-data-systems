@@ -421,6 +421,214 @@ def cmd_demo(args: argparse.Namespace) -> int:
     )
     return 0
 
+def _emit_sql_text(plan_obj: Dict[str, Any], dialect: str) -> str:
+    """
+    Emit SQL text from an in-memory plan object (no file IO).
+    Mirrors cmd_emit_sql() behavior.
+    """
+    if "decision" not in plan_obj:
+        _raise_config_error(
+            "PPDS_PLAN_MISSING_DECISION",
+            "plan object missing required key: decision",
+            details={"keys": sorted(list(plan_obj.keys()))},
+            remediation="Regenerate plan.json using `ppds plan` with valid inputs.",
+        )
+
+    dec = plan_obj.get("decision", {})
+    constraints = plan_obj.get("planner_constraints_json", {})
+
+    header_meta = {
+        "schema_version": plan_obj.get("schema_version"),
+        "created_at": plan_obj.get("created_at"),
+        "policy_hash": plan_obj.get("policy_hash"),
+        "input_fingerprint": plan_obj.get("input_fingerprint"),
+        "plan_fingerprint": plan_obj.get("plan_fingerprint"),
+        "dialect": dialect,
+        "boundary": dec.get("boundary"),
+        "granularity": dec.get("granularity"),
+        "feasible": dec.get("feasible"),
+    }
+    header = "-- ppds:" + json.dumps(header_meta, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    return (
+        header
+        + "\n"
+        + "-- constraints="
+        + json.dumps(constraints, sort_keys=True, ensure_ascii=False)
+        + "\n\nSELECT 1 AS ppds_placeholder;\n"
+    )
+
+
+def _feature_id_from_features_obj(features_obj: Dict[str, Any], fallback_stem: str) -> str:
+    fid = features_obj.get("feature_id")
+    if isinstance(fid, str) and fid.strip():
+        return fid.strip()
+    return fallback_stem
+
+
+def _list_feature_files(features_dir: Path) -> List[Path]:
+    if not features_dir.exists() or not features_dir.is_dir():
+        _raise_config_error(
+            "PPDS_FEATURES_DIR_NOT_FOUND",
+            f"features-dir not found or not a directory: {features_dir}",
+            details={"features_dir": str(features_dir)},
+            remediation="Pass an existing directory via --features-dir.",
+        )
+    files = sorted([p for p in features_dir.iterdir() if p.is_file() and p.suffix.lower() == ".json"])
+    if not files:
+        _raise_config_error(
+            "PPDS_FEATURES_DIR_EMPTY",
+            f"No .json feature specs found in: {features_dir}",
+            details={"features_dir": str(features_dir)},
+            remediation="Put one or more feature spec JSON files in the directory.",
+        )
+    return files
+
+
+def cmd_run_batch(args: argparse.Namespace) -> int:
+    """
+    Run PPDS planning over a directory of feature spec JSONs.
+
+    Output layout:
+      out_dir/{feature_id}/plan.json
+      out_dir/{feature_id}/query.sql
+    Plus an index:
+      out_dir/index.json
+    """
+    policy_obj = _load_json(args.policy)
+
+    # Pre-validate policy shape early
+    if "thresholds" not in policy_obj or not isinstance(policy_obj.get("thresholds"), dict):
+        _raise_config_error(
+            "PPDS_POLICY_INVALID",
+            "policy missing required object: thresholds",
+            details={"path": args.policy},
+            remediation="Ensure policy JSON contains a top-level 'thresholds' object.",
+        )
+
+    th = _to_thresholds(policy_obj)
+    policy_hash = _sha256_hex(policy_obj)
+
+    features_dir = Path(args.features_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results: List[Dict[str, Any]] = []
+    files = _list_feature_files(features_dir)
+
+    any_failed = False
+
+    for fpath in files:
+        try:
+            features_obj = _load_json(str(fpath))
+            ok, errors = _validate_policy_features(policy_obj, features_obj)
+            if not ok:
+                raise PPDSException(
+                    PPDSProblem(
+                        code="PPDS_CONFIG_INVALID",
+                        category="config",
+                        message="Invalid policy/features configuration",
+                        details={"feature_file": str(fpath), "errors": errors},
+                        remediation="Fix the feature spec JSON and rerun batch.",
+                    ),
+                    ExitCode.CONFIG_INVALID,
+                )
+
+            feat = _to_feature_spec(features_obj)
+            dec = decide(feat, th)
+
+            plan_obj: Dict[str, Any] = {
+                "schema_version": 1,
+                "created_at": _utc_now_iso(),
+                "policy_hash": policy_hash,
+                "input_fingerprint": _sha256_hex(features_obj),
+                "decision": {
+                    "boundary": getattr(dec.boundary, "value", str(dec.boundary)),
+                    "granularity": getattr(dec.granularity, "value", str(dec.granularity)),
+                    "feasible": bool(dec.feasible),
+                    "reason": dec.reason,
+                },
+                "planner_constraints_json": getattr(dec, "planner_constraints_json", None),
+                "scorecard": asdict(dec.scorecard) if hasattr(dec, "scorecard") else None,
+            }
+            plan_obj["plan_fingerprint"] = _plan_fingerprint(plan_obj)
+
+            feature_id = _feature_id_from_features_obj(features_obj, fpath.stem)
+            feature_out = out_dir / feature_id
+            feature_out.mkdir(parents=True, exist_ok=True)
+
+            plan_path = feature_out / "plan.json"
+            sql_path = feature_out / "query.sql"
+
+            _write_text(plan_path, json.dumps(plan_obj, indent=2, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+            _write_text(sql_path, _emit_sql_text(plan_obj, args.dialect))
+
+            results.append(
+                {
+                    "feature_id": feature_id,
+                    "feature_file": str(fpath),
+                    "status": "accepted" if plan_obj["decision"]["feasible"] else "rejected",
+                    "plan_fingerprint": plan_obj["plan_fingerprint"],
+                    "plan_path": str(plan_path),
+                    "sql_path": str(sql_path),
+                }
+            )
+
+        except PPDSException as e:
+            any_failed = True
+            results.append(
+                {
+                    "feature_id": fpath.stem,
+                    "feature_file": str(fpath),
+                    "status": "error",
+                    "error": _problem_to_dict(e.problem),
+                    "exit_code": int(e.exit_code),
+                }
+            )
+            if args.fail_fast:
+                break
+
+        except Exception as e:
+            any_failed = True
+            results.append(
+                {
+                    "feature_id": fpath.stem,
+                    "feature_file": str(fpath),
+                    "status": "error",
+                    "error": {
+                        "code": "PPDS_UNHANDLED_EXCEPTION",
+                        "category": "internal",
+                        "message": "Unhandled exception in batch",
+                        "details": {"error": repr(e)},
+                    },
+                    "exit_code": int(ExitCode.INTERNAL_ERROR),
+                }
+            )
+            if args.fail_fast:
+                break
+
+    index_obj = {
+        "schema_version": "ppds.batch/0.1",
+        "created_at": _utc_now_iso(),
+        "policy_hash": policy_hash,
+        "features_dir": str(features_dir),
+        "out_dir": str(out_dir),
+        "dialect": args.dialect,
+        "results": results,
+        "ok": not any_failed,
+    }
+
+    index_path = out_dir / "index.json"
+    _write_text(index_path, json.dumps(index_obj, indent=2, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+
+    if args.format in ("json", "jsonl"):
+        _print_payload({"ok": not any_failed, "index": str(index_path), "count": len(results)}, args.format)
+    else:
+        print(f"Wrote batch index: {index_path}")
+        print(f"Processed {len(results)} feature specs (ok={not any_failed})")
+
+    return 0 if not any_failed else int(ExitCode.RUNTIME_ERROR)
+
 
 # =============================================================================
 # Parser + entrypoint
